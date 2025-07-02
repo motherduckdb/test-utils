@@ -68,7 +68,7 @@ static bool SerializeQueriesPlans(ClientContext &context, const vector<string> &
 	auto &state = TUStorageExtensionInfo::GetState(*context.db);
 	// Now run each line as a query and serialize the plan to the output file.
 	for (const auto &current_query : queries) {
-		auto uuid = UUIDv7::GenerateRandomUUID();
+		auto uuid = UUID::GenerateRandomUUID();
 		con.BeginTransaction();
 		Parser p;
 		p.ParseQuery(current_query);
