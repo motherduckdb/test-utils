@@ -106,6 +106,15 @@ jobs:
       exclude_archs: 'linux_amd64;linux_arm64;linux_amd64_musl;osx_amd64;windows_amd64;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads'
       extension_name: test_utils
 
+  duckdb-stable-132:
+    name: Build extension binaries (v1.3.2)
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.3.2
+    with:
+      duckdb_version: v1.3.2
+      ci_tools_version: v1.3.2
+      exclude_archs: 'linux_amd64;linux_arm64;linux_amd64_musl;osx_amd64;windows_amd64;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads'
+      extension_name: test_utils
+
   upload_extensions:
     name: Upload Extensions to S3
     needs: [duckdb-stable-110, duckdb-stable-111, duckdb-stable-112, duckdb-stable-113, duckdb-stable-120, duckdb-stable-121, duckdb-stable-122, duckdb-stable-130, duckdb-stable-131]
