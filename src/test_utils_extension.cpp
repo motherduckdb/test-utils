@@ -8,9 +8,9 @@
 namespace duckdb {
 
 bool SerializeQueriesPlansFromFile(ClientContext &, const vector<Value> &);
-bool ExecuteAllPlansFromMemory(ClientContext &);
 bool ExecuteAllPlansFromFile(ClientContext &, const vector<Value> &);
 bool CompareResults(ClientContext &, const vector<Value> &);
+bool SerializeResults(ClientContext &, const vector<Value> &);
 
 static void LoadInternal(DatabaseInstance &instance) {
 	// Register the storage extension
@@ -20,9 +20,10 @@ static void LoadInternal(DatabaseInstance &instance) {
 
 	// Register the functions
 	REGISTER_TF("serialize_queries_plans", SerializeQueriesPlansFromFile, 2);
-	REGISTER_TF("execute_all_plans_from_memory", ExecuteAllPlansFromMemory, 0);
 	REGISTER_TF("execute_all_plans_from_file", ExecuteAllPlansFromFile, 2);
 	REGISTER_TF("compare_results", CompareResults, 1);
+	REGISTER_TF("compare_results", CompareResults, 2);
+	REGISTER_TF("serialize_results", SerializeResults, 2);
 }
 
 void TestUtilsExtension::Load(DuckDB &db) {

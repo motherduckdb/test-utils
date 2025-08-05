@@ -26,7 +26,7 @@ SerializedPlan TUStorageExtensionInfo::PopPlan() {
 
 	auto plan = std::move(plans.front());
 	plans.pop();
-	return std::move(plan);
+	return plan;
 }
 
 bool TUStorageExtensionInfo::HasPlan() {
@@ -34,16 +34,30 @@ bool TUStorageExtensionInfo::HasPlan() {
 	return !plans.empty();
 }
 
-void TUStorageExtensionInfo::AddResult(hugeint_t uuid, SerializedResult &&result) {
+void TUStorageExtensionInfo::AddResult(unique_ptr<SerializedResult> &&result) {
 	std::lock_guard<std::mutex> lock(mutex);
-	results[uuid] = std::move(result);
+	results.emplace(result->uuid, std::move(result));
+}
+
+void TUStorageExtensionInfo::AddQuery(const SQLLogicQuery &query) {
+	std::lock_guard<std::mutex> lock(mutex);
+	queries[query.uuid] = query;
 }
 
 const SerializedResult &TUStorageExtensionInfo::GetResult(hugeint_t uuid) {
 	std::lock_guard<std::mutex> lock(mutex);
 	auto it = results.find(uuid);
 	if (it == results.end()) {
-		throw InternalException("No result found for '" + uuid.ToString() + "'");
+		throw InternalException("No result found for '%s'", BaseUUID::ToString(uuid));
+	}
+	return *it->second;
+}
+
+const SQLLogicQuery &TUStorageExtensionInfo::GetQuery(hugeint_t uuid) {
+	std::lock_guard<std::mutex> lock(mutex);
+	auto it = queries.find(uuid);
+	if (it == queries.end()) {
+		throw InternalException("No query found for '%s'", BaseUUID::ToString(uuid));
 	}
 	return it->second;
 }

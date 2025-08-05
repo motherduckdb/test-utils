@@ -7,10 +7,9 @@
 #include <fstream>
 
 #include "state.hpp"
+#include "utils/serialization_helpers.hpp"
 
 namespace duckdb {
-
-static void SerializeResult(unique_ptr<QueryResult>, const hugeint_t &, BufferedFileWriter &);
 
 bool ExecuteAllPlansFromFile(ClientContext &context, const vector<Value> &params) {
 	const auto input_file = params[0].GetValue<string>();
@@ -32,57 +31,39 @@ bool ExecuteAllPlansFromFile(ClientContext &context, const vector<Value> &params
 	Connection con(*context.db);
 
 	for (int32_t i = 0; i < count; ++i) {
-		con.BeginTransaction();
 		BinaryDeserializer deserializer(file_reader);
 		deserializer.Set<ClientContext &>(*con.context);
 		deserializer.Begin();
-		auto uuid = deserializer.ReadProperty<hugeint_t>(100, "uuid");
-		auto plan = LogicalOperator::Deserialize(deserializer);
+		auto sqll_query = SQLLogicQuery::Deserialize(deserializer);
 		deserializer.End();
 
-		plan->ResolveOperatorTypes();
-		auto results = con.context->Query(make_uniq<LogicalPlanStatement>(std::move(plan)), false);
-		if (results->HasError()) {
-			std::cerr << "Query failed with message: " << results->GetError() << std::endl;
-		}
+		if (sqll_query->can_deserialize_plan) {
+			for (idx_t statement_idx = 0; statement_idx < sqll_query->nb_statements; ++statement_idx) {
+				con.BeginTransaction();
+				deserializer.Begin();
+				auto plan = LogicalOperator::Deserialize(deserializer);
+				deserializer.End();
 
-		SerializeResult(std::move(results), uuid, file_writer);
-		con.Rollback();
+				plan->ResolveOperatorTypes();
+				auto results = con.context->Query(make_uniq<LogicalPlanStatement>(std::move(plan)), false);
+				serializer.Begin();
+				SerializedResult(sqll_query->uuid, *results).Serialize(serializer);
+				serializer.End();
+				con.Commit();
+			}
+		} else {
+			con.BeginTransaction();
+			auto results = con.context->Query(sqll_query->query, false);
+			serializer.Begin();
+			SerializedResult(sqll_query->uuid, *results).Serialize(serializer);
+			serializer.End();
+			con.Commit();
+		}
 	}
 
 	file_writer.Sync();
 
 	return true;
-}
-
-static void SerializeResult(unique_ptr<QueryResult> results, const hugeint_t &uuid, BufferedFileWriter &file_writer) {
-	BinarySerializer serializer(file_writer);
-	serializer.Begin();
-	serializer.WriteProperty(200, "uuid", uuid);
-	serializer.WriteProperty(201, "success", !results->HasError());
-	if (results->HasError()) {
-		// TODO - serialize the error object
-		auto error = results->GetErrorObject();
-		error.ConvertErrorToJSON();
-		serializer.WriteProperty(202, "error", error.RawMessage());
-	} else {
-		serializer.WriteProperty(203, "types", results->types);
-		serializer.WriteProperty(204, "names", results->names);
-		vector<unique_ptr<DataChunk>> chunks;
-		while (true) {
-			auto chunk = results->Fetch();
-			if (!chunk) {
-				break;
-			}
-			chunks.push_back(std::move(chunk));
-		}
-		serializer.WriteProperty(205, "chunks_count", static_cast<uint32_t>(chunks.size()));
-		for (const auto &chunk : chunks) {
-			chunk->Serialize(serializer);
-		}
-	}
-
-	serializer.End();
 }
 
 } // namespace duckdb

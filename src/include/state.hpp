@@ -1,27 +1,15 @@
 #pragma once
 
 #include <string>
-#include <duckdb/common/serializer/memory_stream.hpp>
+
 #include <duckdb/common/types/uuid.hpp>
 #include <duckdb/storage/storage_extension.hpp>
 #include <duckdb/main/connection.hpp>
 
+#include "utils/serialization_helpers.hpp"
+
 namespace duckdb {
 const static std::string STORAGE_EXTENSION_KEY = "test_utils_storage";
-
-struct SerializedPlan {
-	MemoryStream serialized_plan;
-	hugeint_t uuid;
-};
-
-struct SerializedResult {
-	hugeint_t uuid;
-	bool success;
-	ErrorData error;
-	vector<LogicalType> types;
-	vector<string> names;
-	vector<unique_ptr<DataChunk>> chunks;
-};
 
 class TUStorageExtensionInfo : public StorageExtensionInfo {
 public:
@@ -33,14 +21,19 @@ public:
 
 	bool HasPlan();
 
-	void AddResult(hugeint_t uuid, SerializedResult &&result);
+	void AddQuery(const SQLLogicQuery &query);
+
+	void AddResult(unique_ptr<SerializedResult> &&result);
 
 	const SerializedResult &GetResult(hugeint_t uuid);
+
+	const SQLLogicQuery &GetQuery(hugeint_t uuid);
 
 private:
 	std::mutex mutex;
 	std::queue<SerializedPlan> plans;
-	std::map<hugeint_t, SerializedResult> results;
+	std::map<hugeint_t, SQLLogicQuery> queries;
+	std::map<hugeint_t, unique_ptr<SerializedResult>> results;
 };
 
 } // namespace duckdb
