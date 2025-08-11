@@ -2,7 +2,14 @@
 
 #include <duckdb/main/database.hpp>
 
+#include "utils/compatibility.hpp"
+
 namespace duckdb {
+
+#if DUCKDB_VERSION_AT_MOST(1, 2, 2)
+// BaseUUID was introduced in DuckDB 1.3.0
+using BaseUUID = duckdb::UUID;
+#endif
 
 TUStorageExtensionInfo &TUStorageExtensionInfo::GetState(const DatabaseInstance &instance) {
 	auto &config = instance.config;
