@@ -7,8 +7,14 @@
 #include <fstream>
 
 #include "state.hpp"
+#include "utils/compatibility.hpp"
 
 namespace duckdb {
+
+// ExecutorException was introduced in 1.1.2, use SerializationException instead
+#if DUCKDB_VERSION_AT_MOST(1, 1, 1)
+using ExecutorException = SerializationException;
+#endif
 
 SerializedResult DeserializeResult(BufferedFileReader &);
 void DoSimpleCompareResults(const SerializedResult &, const SerializedResult &, const SQLLogicQuery &,
