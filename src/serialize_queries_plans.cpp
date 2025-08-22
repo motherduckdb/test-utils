@@ -236,39 +236,10 @@ bool PlanContains(const LogicalOperator &plan, bool (*predicate)(const LogicalOp
  * ShouldSkipQuery - Check whether a given query should be skipped entirely *
  * ------------------------------------------------------------------------ */
 
-bool ShouldSkipExpression(const BaseExpression &expr) {
-	// TODO - properly traverse expression and find functions by name
-	auto expr_name = expr.GetName();
-	return expr_name.find("random(") != string::npos || expr_name.find("gen_random_uuid()") != string::npos;
-}
-
-bool HasSkippedExpressionBoundLimitNode(const BoundLimitNode &op) {
-	if (op.Type() == LimitNodeType::EXPRESSION_VALUE) {
-		return ShouldSkipExpression(op.GetValueExpression());
-	} else if (op.Type() == LimitNodeType::EXPRESSION_PERCENTAGE) {
-		return ShouldSkipExpression(op.GetPercentageExpression());
-	}
-	return false;
-}
-
-bool HasSkippedExpression(const LogicalOperator &op) {
-	for (const auto &expr : op.expressions) {
-		if (ShouldSkipExpression(*expr)) {
-			return true;
-		}
-	}
-
-	if (op.type == LogicalOperatorType::LOGICAL_LIMIT) {
-		auto &op_limit = op.Cast<LogicalLimit>();
-		return HasSkippedExpressionBoundLimitNode(op_limit.limit_val) ||
-		       HasSkippedExpressionBoundLimitNode(op_limit.offset_val);
-	}
-	return false;
-}
-
 bool ShouldSkipQuery(const LogicalOperator &op) {
 	switch (op.type) {
 	case LogicalOperatorType::LOGICAL_TRANSACTION:
+		// We're not testing transaction semantics
 		return true;
 	case LogicalOperatorType::LOGICAL_PRAGMA: {
 		auto &pragma_op = op.Cast<LogicalPragma>();
@@ -295,7 +266,7 @@ bool ShouldSkipQuery(const LogicalOperator &op) {
 		break;
 	}
 
-	return PlanContains(op, &HasSkippedExpression);
+	return false;
 }
 
 /* ---------------------------------------------------------------------
