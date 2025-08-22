@@ -41,6 +41,7 @@ bool SerializeResults(ClientContext &context, const vector<Value> &params) {
 	}
 
 	file_writer.Sync();
+	file_writer.Close();
 	return true;
 }
 } // namespace duckdb

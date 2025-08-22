@@ -41,9 +41,17 @@ bool CompareResults(ClientContext &context, const vector<Value> &params) {
 		deserializer.Begin();
 		auto file_result = SerializedResult::Deserialize(deserializer);
 		deserializer.End();
-		auto &in_mem_result = state.GetResult(file_result->uuid);
-		auto &in_mem_query = state.GetQuery(file_result->uuid);
 
+		if (file_result->is_skipped) {
+			continue;
+		}
+
+		auto &in_mem_query = state.GetQuery(file_result->uuid);
+		if (in_mem_query.should_skip_query) {
+			continue;
+		}
+
+		auto &in_mem_result = state.GetResult(file_result->uuid);
 		if (in_mem_query.flags.sort_style == SortStyle::NO_SORT) {
 			DoSimpleCompareResults(in_mem_result, *file_result, in_mem_query);
 		} else {
@@ -72,6 +80,10 @@ void ReloadResults(ClientContext &context, const vector<Value> &params) {
 		deserializer.End();
 		state.AddQuery(*query);
 
+		if (query->should_skip_query) {
+			continue;
+		}
+
 		deserializer.Begin();
 		auto result = SerializedResult::Deserialize(deserializer);
 		deserializer.End();
@@ -82,10 +94,17 @@ void ReloadResults(ClientContext &context, const vector<Value> &params) {
 void DoSimpleCompareResults(const SerializedResult &in_mem_result, const SerializedResult &file_result,
                             const SQLLogicQuery &squery, bool do_compare_values) {
 	if (in_mem_result.success != file_result.success) {
-		const auto msg = in_mem_result.success
-		                     ? "Results mismatch: in-memory result is successful but file result is not"
-		                     : "Results mismatch: in-memory result failed but file result did not";
-		throw ExecutorException(msg);
+		std::ostringstream oss;
+		oss << "Query '" << squery.query << "' results mismatch: in-memory result is ";
+
+		if (in_mem_result.success) {
+			oss << "successful but file result is not: ";
+			oss << file_result.error.Message();
+		} else {
+			oss << "failed but file result is not: ";
+			oss << in_mem_result.error.Message();
+		}
+		throw ExecutorException(oss.str());
 	}
 
 	if (!in_mem_result.success) {
@@ -93,7 +112,7 @@ void DoSimpleCompareResults(const SerializedResult &in_mem_result, const Seriali
 			std::ostringstream oss;
 			oss << "Query '" << squery.query << "' results mismatch: error messages differ:\n"
 			    << "In-memory error:\n------------\n"
-			    << in_mem_result.error.Message() << "\n\n------------\nFile error:\n------------"
+			    << in_mem_result.error.Message() << "\n\n------------\nFile error:\n------------\n"
 			    << file_result.error.Message() << std::endl;
 			throw ExecutorException(oss.str());
 		}
@@ -273,10 +292,9 @@ vector<string> StringifyAndSortResults(ClientContext &context, const SerializedR
 	// perform any required query sorts
 	if (query.flags.sort_style == SortStyle::ROW_SORT) {
 		// row-oriented sorting
-		idx_t nrows = total_value_count / ncols;
 		vector<vector<string>> rows;
-		rows.reserve(nrows);
-		for (idx_t row_idx = 0; row_idx < nrows; row_idx++) {
+		rows.reserve(row_count);
+		for (idx_t row_idx = 0; row_idx < row_count; row_idx++) {
 			vector<string> row;
 			row.reserve(ncols);
 			for (idx_t col_idx = 0; col_idx < ncols; col_idx++) {
@@ -296,7 +314,7 @@ vector<string> StringifyAndSortResults(ClientContext &context, const SerializedR
 		});
 
 		// now reconstruct the values from the rows
-		for (idx_t row_idx = 0; row_idx < nrows; row_idx++) {
+		for (idx_t row_idx = 0; row_idx < row_count; row_idx++) {
 			for (idx_t col_idx = 0; col_idx < ncols; col_idx++) {
 				result_values_string[row_idx * ncols + col_idx] = std::move(rows[row_idx][col_idx]);
 			}

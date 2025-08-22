@@ -7,7 +7,6 @@
 #include <duckdb/main/query_result.hpp>
 
 namespace duckdb {
-bool CanExecuteSerializedOperator(const std::string &, LogicalOperatorType);
 
 struct SerializedPlan {
 	MemoryStream serialized_plan;
@@ -19,6 +18,7 @@ struct SerializedResult {
 	SerializedResult(const hugeint_t &, QueryResult &query_result);
 
 	void Serialize(Serializer &serializer) const;
+	static void SerializeSkipped(Serializer &serializer);
 	static unique_ptr<SerializedResult> Deserialize(Deserializer &deserializer);
 
 	idx_t RowCount() const;
@@ -27,6 +27,7 @@ struct SerializedResult {
 
 	hugeint_t uuid;
 	bool success;
+	bool is_skipped;
 	ErrorData error;
 	vector<LogicalType> types;
 	vector<string> names;
@@ -39,14 +40,14 @@ enum class ExpectedResultType : uint8_t { UNKNOWN, SUCCESS, ERROR };
 class SQLLogicQuery {
 public:
 	SQLLogicQuery() = default;
-	SQLLogicQuery(const string &_query, const std::map<string, string> &_flags);
+	SQLLogicQuery(const string &_query, const uint32_t _query_idx, const std::map<string, string> &_flags);
 
 	void Serialize(Serializer &serializer) const;
 
 	static unique_ptr<SQLLogicQuery> Deserialize(Deserializer &deserializer);
 
 	struct QueryFlags {
-		ExpectedResultType expected_result_type = ExpectedResultType::UNKNOWN;
+		ExpectedResultType expected_result_type = ExpectedResultType::SUCCESS;
 		SortStyle sort_style = SortStyle::NO_SORT;
 		bool original_sqlite_test = false; // FIXME
 	};
@@ -54,8 +55,11 @@ public:
 	bool ExpectSuccess() const;
 
 	string query;
+	bool can_parse_query = true;
+	bool should_skip_query = false;
 	bool can_deserialize_plan = true;
 	uint32_t nb_statements;
+	uint32_t query_idx;
 	hugeint_t uuid;
 	QueryFlags flags;
 };

@@ -8,15 +8,20 @@
 
 #include "state.hpp"
 #include "utils/serialization_helpers.hpp"
+#include "utils/file_writer.hpp"
+#include "utils/logger.hpp"
 
 namespace duckdb {
+
+void SerializeResult(const SQLLogicQuery &sqll_query, Connection &con, BinarySerializer &serializer,
+                     QueryResult &result);
 
 bool ExecuteAllPlansFromFile(ClientContext &context, const vector<Value> &params) {
 	const auto input_file = params[0].GetValue<string>();
 	const auto output_file = params[1].GetValue<string>();
 
 	BufferedFileReader file_reader(context.db->GetFileSystem(), input_file.c_str());
-	BufferedFileWriter file_writer(context.db->GetFileSystem(), output_file);
+	TUFileWriter file_writer(context, output_file);
 
 	BinaryDeserializer deserializer(file_reader);
 	deserializer.Begin();
@@ -37,33 +42,84 @@ bool ExecuteAllPlansFromFile(ClientContext &context, const vector<Value> &params
 		auto sqll_query = SQLLogicQuery::Deserialize(deserializer);
 		deserializer.End();
 
-		if (sqll_query->can_deserialize_plan) {
-			for (idx_t statement_idx = 0; statement_idx < sqll_query->nb_statements; ++statement_idx) {
-				con.BeginTransaction();
-				deserializer.Begin();
-				auto plan = LogicalOperator::Deserialize(deserializer);
-				deserializer.End();
+		if (sqll_query->should_skip_query) {
+			LOG_DEBUG("Skipping query #" << i << ": '" << sqll_query->query << "'");
+			serializer.Begin();
+			// Serialize an empty result for skipped queries
+			SerializedResult::SerializeSkipped(serializer);
+			serializer.End();
+			continue;
+		}
 
-				plan->ResolveOperatorTypes();
-				auto results = con.context->Query(make_uniq<LogicalPlanStatement>(std::move(plan)), false);
-				serializer.Begin();
-				SerializedResult(sqll_query->uuid, *results).Serialize(serializer);
-				serializer.End();
-				con.Commit();
+		if (sqll_query->can_parse_query && sqll_query->can_deserialize_plan) {
+			LOG_INFO("Executing query from plan #" << i << ": '" << sqll_query->query << "'");
+			for (idx_t statement_idx = 0; statement_idx < sqll_query->nb_statements; ++statement_idx) {
+				try {
+					con.BeginTransaction();
+					deserializer.Begin();
+					auto plan = LogicalOperator::Deserialize(deserializer);
+					deserializer.End();
+
+					plan->ResolveOperatorTypes();
+					auto result = con.context->Query(make_uniq<LogicalPlanStatement>(std::move(plan)), false);
+					LOG_DEBUG("Executed statement #" << statement_idx << " of query #" << i << ": '"
+					                                 << sqll_query->query << "' - "
+					                                 << (result->HasError() ? "failed" : "succeeded"));
+					SerializeResult(*sqll_query, con, serializer, *result);
+				} catch (const Exception &e) {
+					LOG_ERROR("Failed to execute statement #" << statement_idx << " of query #" << i << ": '"
+					                                          << sqll_query->query << "': " << e.what())
+					throw;
+				}
 			}
 		} else {
-			con.BeginTransaction();
-			auto results = con.context->Query(sqll_query->query, false);
-			serializer.Begin();
-			SerializedResult(sqll_query->uuid, *results).Serialize(serializer);
-			serializer.End();
-			con.Commit();
+			LOG_INFO("Executing query from SQL #" << i << ": '" << sqll_query->query << "'");
+			try {
+				con.BeginTransaction();
+				auto result = con.context->Query(sqll_query->query, false);
+				SerializeResult(*sqll_query, con, serializer, *result);
+				LOG_DEBUG("Executed query #" << i << ": '" << sqll_query->query << "' - "
+				                             << (result->HasError() ? "failed" : "succeeded"));
+			} catch (const Exception &e) {
+				LOG_ERROR("Failed to execute query #" << i << ": '" << sqll_query->query << "': " << e.what())
+				throw;
+			}
 		}
 	}
 
 	file_writer.Sync();
 
+	// Detach all databases attached during the query
+	DatabaseManager &db_manager = context.db->GetDatabaseManager();
+	auto databases = db_manager.GetDatabases(context);
+	for (auto &db : databases) {
+		auto &db_instance = db.get();
+		auto name = db_instance.GetName();
+		if (!db_instance.IsSystem() && !db_instance.IsTemporary() && name != "memory") {
+			db_manager.DetachDatabase(context, name, OnEntryNotFound::THROW_EXCEPTION);
+		}
+	}
+
 	return true;
+}
+
+void SerializeResult(const SQLLogicQuery &sqll_query, Connection &con, BinarySerializer &serializer,
+                     QueryResult &result) {
+	serializer.Begin();
+	SerializedResult(sqll_query.uuid, result).Serialize(serializer);
+	serializer.End();
+	if (!result.HasError()) {
+		con.Commit();
+		return;
+	}
+
+	// Make sure the execution didn't cause DB to get invalidated.
+	auto &db_inst = DatabaseInstance::GetDatabase(*con.context);
+	if (ValidChecker::IsInvalidated(db_inst)) {
+		result.ThrowError(); // We don't want to continue at this point.
+	}
+
+	con.Commit();
 }
 
 } // namespace duckdb

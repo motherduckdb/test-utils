@@ -22,7 +22,9 @@ endif()
 include_directories(src/include)
 
 set(EXTENSION_SOURCES
+  src/utils/file_writer.cpp
   src/utils/helpers.cpp
+  src/utils/logger.cpp
   src/utils/serialization_helpers.cpp
   src/compare_results.cpp
   src/execute_all_from_file.cpp
