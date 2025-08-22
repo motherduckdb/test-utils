@@ -3,6 +3,8 @@
 #include "state.hpp"
 #include "test_utils_extension.hpp"
 #include "utils/helpers.hpp"
+#include "utils/logger.hpp"
+
 #include <duckdb.hpp>
 
 namespace duckdb {
@@ -19,6 +21,8 @@ static void LoadInternal(DatabaseInstance &instance) {
 	if (instance.config.storage_extensions.find(STORAGE_EXTENSION_KEY) != instance.config.storage_extensions.end()) {
 		return;
 	}
+
+	set_log_level_from_env();
 
 	instance.config.storage_extensions[STORAGE_EXTENSION_KEY] = std::move(ext);
 
