@@ -6,26 +6,6 @@
 
 namespace duckdb {
 
-bool CanExecuteSerializedOperator(const std::string &query, LogicalOperatorType type) {
-	switch (type) {
-	// DuckSchemaEntry::AddEntryInternal called but this database is not marked as modified
-	case LogicalOperatorType::LOGICAL_CREATE_TABLE:
-	case LogicalOperatorType::LOGICAL_CREATE_MACRO:
-
-	// Attempting to commit a transaction that is read-only but has made changes - this should not be possible
-	case LogicalOperatorType::LOGICAL_INSERT:
-
-	// Not implemented Error: PLAN_STATEMENT
-	case LogicalOperatorType::LOGICAL_CREATE_VIEW:
-
-	// Serialization Error: Unsupported type for deserialization of LogicalOperator!
-	case LogicalOperatorType::LOGICAL_PRAGMA:
-		return false;
-	default:
-		return query.find("CALL dbgen") == string::npos;
-	}
-}
-
 SerializedResult::SerializedResult(const hugeint_t &_uuid, QueryResult &query_result) {
 	uuid = _uuid;
 	success = !query_result.HasError();
@@ -48,13 +28,15 @@ SerializedResult::SerializedResult(const hugeint_t &_uuid, QueryResult &query_re
 }
 
 void SerializedResult::Serialize(Serializer &serializer) const {
-	serializer.WriteProperty(200, "uuid", uuid);
-	serializer.WriteProperty(201, "success", success);
+	auto n = 200;
+	serializer.WriteProperty(++n, "is_skipped", false);
+	serializer.WriteProperty(++n, "uuid", uuid);
+	serializer.WriteProperty(++n, "success", success);
 
 	if (success) {
-		serializer.WriteProperty(203, "types", types);
-		serializer.WriteProperty(204, "names", names);
-		serializer.WriteProperty(205, "chunks_count", static_cast<uint32_t>(chunks.size()));
+		serializer.WriteProperty(++n, "types", types);
+		serializer.WriteProperty(++n, "names", names);
+		serializer.WriteProperty(++n, "chunks_count", static_cast<uint32_t>(chunks.size()));
 
 		for (const auto &chunk : chunks) {
 			chunk->Serialize(serializer);
@@ -62,25 +44,37 @@ void SerializedResult::Serialize(Serializer &serializer) const {
 	} else {
 		// TODO - serialize the error object
 		auto json_error = error;
-		json_error.ConvertErrorToJSON();
-		serializer.WriteProperty(202, "error", json_error.RawMessage());
+		serializer.WriteProperty(++n, "raw_error_msg", json_error.RawMessage());
+		serializer.WriteProperty(++n, "error_type", json_error.Type());
 	}
+}
+
+void SerializedResult::SerializeSkipped(Serializer &serializer) {
+	serializer.WriteProperty(201, "is_skipped", true);
 }
 
 unique_ptr<SerializedResult> SerializedResult::Deserialize(Deserializer &deserializer) {
 	auto result = make_uniq<SerializedResult>();
-	result->uuid = deserializer.ReadProperty<hugeint_t>(200, "uuid");
-
-	result->success = deserializer.ReadProperty<bool>(201, "success");
-	if (!result->success) {
-		result->error = ErrorData(deserializer.ReadProperty<string>(202, "error"));
+	auto n = 200;
+	result->is_skipped = deserializer.ReadProperty<bool>(++n, "is_skipped");
+	if (result->is_skipped) {
 		return result;
 	}
 
-	result->types = deserializer.ReadProperty<vector<LogicalType>>(203, "types");
-	result->names = deserializer.ReadProperty<vector<string>>(204, "names");
+	result->uuid = deserializer.ReadProperty<hugeint_t>(++n, "uuid");
 
-	const auto chunks_count = deserializer.ReadProperty<uint32_t>(205, "chunks_count");
+	result->success = deserializer.ReadProperty<bool>(++n, "success");
+	if (!result->success) {
+		auto raw_msg = deserializer.ReadProperty<string>(++n, "raw_error_msg");
+		auto type = deserializer.ReadProperty<ExceptionType>(++n, "error_type");
+		result->error = ErrorData(type, raw_msg);
+		return result;
+	}
+
+	result->types = deserializer.ReadProperty<vector<LogicalType>>(++n, "types");
+	result->names = deserializer.ReadProperty<vector<string>>(++n, "names");
+
+	const auto chunks_count = deserializer.ReadProperty<uint32_t>(++n, "chunks_count");
 	for (uint32_t i = 0; i < chunks_count; ++i) {
 		auto chunk = make_uniq<DataChunk>();
 		chunk->Deserialize(deserializer);
@@ -118,8 +112,9 @@ Value SerializedResult::GetValue(idx_t column, idx_t index) const {
 	throw InternalException("Row index out of bounds in SerializedResult::GetValue");
 }
 
-SQLLogicQuery::SQLLogicQuery(const string &_query, const std::map<string, string> &_flags) {
+SQLLogicQuery::SQLLogicQuery(const string &_query, const uint32_t _query_idx, const std::map<string, string> &_flags) {
 	query = _query;
+	query_idx = _query_idx;
 	uuid = UUID::GenerateRandomUUID();
 	flags.sort_style = SortStyle::NO_SORT;
 
@@ -149,27 +144,35 @@ bool SQLLogicQuery::ExpectSuccess() const {
 }
 
 void SQLLogicQuery::Serialize(Serializer &serializer) const {
-	serializer.WriteProperty(101, "uuid", uuid);
-	serializer.WriteProperty(102, "query", query);
-	serializer.WriteProperty(103, "can_deserialize_plan", can_deserialize_plan);
-	serializer.WriteProperty(104, "nb_statements", nb_statements);
+	auto n = 100;
+	serializer.WriteProperty(++n, "uuid", uuid);
+	serializer.WriteProperty(++n, "idx", query_idx);
+	serializer.WriteProperty(++n, "query", query);
+	serializer.WriteProperty(++n, "can_parse_query", can_parse_query);
+	serializer.WriteProperty(++n, "should_skip_query", should_skip_query);
+	serializer.WriteProperty(++n, "can_deserialize_plan", can_deserialize_plan);
+	serializer.WriteProperty(++n, "nb_statements", nb_statements);
 
 	// Write flags
-	serializer.WriteProperty(105, "expected_result_type", static_cast<uint8_t>(flags.expected_result_type));
-	serializer.WriteProperty(106, "sort_style", static_cast<uint8_t>(flags.sort_style));
+	serializer.WriteProperty(++n, "expected_result_type", static_cast<uint8_t>(flags.expected_result_type));
+	serializer.WriteProperty(++n, "sort_style", static_cast<uint8_t>(flags.sort_style));
 }
 
 unique_ptr<SQLLogicQuery> SQLLogicQuery::Deserialize(Deserializer &deserializer) {
+	auto n = 100;
 	auto query = make_uniq<SQLLogicQuery>();
-	query->uuid = deserializer.ReadProperty<hugeint_t>(101, "uuid");
-	query->query = deserializer.ReadProperty<string>(102, "query");
-	query->can_deserialize_plan = deserializer.ReadProperty<bool>(103, "can_deserialize_plan");
-	query->nb_statements = deserializer.ReadProperty<bool>(104, "nb_statements");
+	query->uuid = deserializer.ReadProperty<hugeint_t>(++n, "uuid");
+	query->query_idx = deserializer.ReadProperty<uint32_t>(++n, "idx");
+	query->query = deserializer.ReadProperty<string>(++n, "query");
+	query->can_parse_query = deserializer.ReadProperty<bool>(++n, "can_parse_query");
+	query->should_skip_query = deserializer.ReadProperty<bool>(++n, "should_skip_query");
+	query->can_deserialize_plan = deserializer.ReadProperty<bool>(++n, "can_deserialize_plan");
+	query->nb_statements = deserializer.ReadProperty<bool>(++n, "nb_statements");
 
 	// Read flags
 	query->flags.expected_result_type =
-	    static_cast<ExpectedResultType>(deserializer.ReadProperty<uint8_t>(105, "expected_result_type"));
-	query->flags.sort_style = static_cast<SortStyle>(deserializer.ReadProperty<uint8_t>(106, "sort_style"));
+	    static_cast<ExpectedResultType>(deserializer.ReadProperty<uint8_t>(++n, "expected_result_type"));
+	query->flags.sort_style = static_cast<SortStyle>(deserializer.ReadProperty<uint8_t>(++n, "sort_style"));
 	return query;
 }
 
