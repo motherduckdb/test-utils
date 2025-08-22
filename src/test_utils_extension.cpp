@@ -16,6 +16,10 @@ static void LoadInternal(DatabaseInstance &instance) {
 	// Register the storage extension
 	auto ext = duckdb::make_uniq<duckdb::StorageExtension>();
 	ext->storage_info = duckdb::make_uniq<TUStorageExtensionInfo>();
+	if (instance.config.storage_extensions.find(STORAGE_EXTENSION_KEY) != instance.config.storage_extensions.end()) {
+		return;
+	}
+
 	instance.config.storage_extensions[STORAGE_EXTENSION_KEY] = std::move(ext);
 
 	// Register the functions
