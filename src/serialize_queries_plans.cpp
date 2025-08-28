@@ -9,6 +9,7 @@
 #include "utils/serialization_helpers.hpp"
 #include "utils/file_writer.hpp"
 #include "utils/logger.hpp"
+#include "utils/misc.hpp"
 
 #include <duckdb/parser/parser.hpp>
 #include <duckdb/planner/planner.hpp>
@@ -126,15 +127,7 @@ bool SerializeQueriesPlansFromFile(ClientContext &context, const vector<Value> &
 	file_writer.Close();
 
 	// Detach all databases attached during the query
-	DatabaseManager &db_manager = context.db->GetDatabaseManager();
-	auto databases = db_manager.GetDatabases(context);
-	for (auto &db : databases) {
-		auto &db_instance = db.get();
-		auto name = db_instance.GetName();
-		if (!db_instance.IsSystem() && !db_instance.IsTemporary() && name != "memory") {
-			db_manager.DetachDatabase(context, name, OnEntryNotFound::THROW_EXCEPTION);
-		}
-	}
+	DetachAllDatabases(context);
 
 	return true;
 }

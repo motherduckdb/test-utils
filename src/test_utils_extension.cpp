@@ -14,7 +14,12 @@ bool ExecuteAllPlansFromFile(ClientContext &, const vector<Value> &);
 bool CompareResults(ClientContext &, const vector<Value> &);
 bool SerializeResults(ClientContext &, const vector<Value> &);
 
+#if DUCKDB_VERSION_AT_MOST(1, 3, 2)
 static void LoadInternal(DatabaseInstance &instance) {
+#else
+static void LoadInternal(ExtensionLoader &loader) {
+	auto &instance = loader.GetDatabaseInstance();
+#endif
 	// Register the storage extension
 	auto ext = duckdb::make_uniq<duckdb::StorageExtension>();
 	ext->storage_info = duckdb::make_uniq<TUStorageExtensionInfo>();
@@ -34,9 +39,16 @@ static void LoadInternal(DatabaseInstance &instance) {
 	REGISTER_TF("serialize_results", SerializeResults, 2);
 }
 
+#if DUCKDB_VERSION_AT_MOST(1, 3, 2)
 void TestUtilsExtension::Load(DuckDB &db) {
 	LoadInternal(*db.instance);
 }
+#else
+void TestUtilsExtension::Load(ExtensionLoader &loader) {
+	LoadInternal(loader);
+}
+#endif
+
 std::string TestUtilsExtension::Name() {
 	return "test_utils";
 }
@@ -53,6 +65,7 @@ std::string TestUtilsExtension::Version() const {
 
 extern "C" {
 
+#if DUCKDB_VERSION_AT_MOST(1, 3, 2)
 DUCKDB_EXTENSION_API void test_utils_init(duckdb::DatabaseInstance &db) {
 	duckdb::DuckDB db_wrapper(db);
 	db_wrapper.LoadExtension<duckdb::TestUtilsExtension>();
@@ -61,6 +74,12 @@ DUCKDB_EXTENSION_API void test_utils_init(duckdb::DatabaseInstance &db) {
 DUCKDB_EXTENSION_API const char *test_utils_version() {
 	return duckdb::DuckDB::LibraryVersion();
 }
+
+#else
+DUCKDB_CPP_EXTENSION_ENTRY(test_utils, loader) {
+	duckdb::LoadInternal(loader);
+}
+#endif
 }
 
 #ifndef DUCKDB_EXTENSION_MAIN
