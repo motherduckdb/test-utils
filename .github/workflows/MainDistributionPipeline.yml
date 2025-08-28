@@ -118,6 +118,8 @@ jobs:
       extension_name: test_utils
 
   duckdb-main:
+    # Disabled until https://github.com/duckdb/duckdb/pull/18774 lands
+    if: false
     name: Build extension binaries (main)
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
