@@ -3,13 +3,9 @@
 #include <duckdb/main/database.hpp>
 
 #include "utils/compatibility.hpp"
+#include "utils/misc.hpp"
 
 namespace duckdb {
-
-#if DUCKDB_VERSION_AT_MOST(1, 2, 2)
-// BaseUUID was introduced in DuckDB 1.3.0
-using BaseUUID = duckdb::UUID;
-#endif
 
 TUStorageExtensionInfo &TUStorageExtensionInfo::GetState(const DatabaseInstance &instance) {
 	auto &config = instance.config;
@@ -55,7 +51,7 @@ const SerializedResult &TUStorageExtensionInfo::GetResult(hugeint_t uuid) {
 	std::lock_guard<std::mutex> lock(mutex);
 	auto it = results.find(uuid);
 	if (it == results.end()) {
-		throw InternalException("No result found for '%s'", BaseUUID::ToString(uuid));
+		throw InternalException("No result found for '%s'", UUIDToString(uuid));
 	}
 	return *it->second;
 }
@@ -64,7 +60,7 @@ const SQLLogicQuery &TUStorageExtensionInfo::GetQuery(hugeint_t uuid) {
 	std::lock_guard<std::mutex> lock(mutex);
 	auto it = queries.find(uuid);
 	if (it == queries.end()) {
-		throw InternalException("No query found for '%s'", BaseUUID::ToString(uuid));
+		throw InternalException("No query found for '%s'", UUIDToString(uuid));
 	}
 	return it->second;
 }

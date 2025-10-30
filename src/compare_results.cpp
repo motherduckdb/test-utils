@@ -4,22 +4,105 @@
 #include <duckdb/common/serializer/binary_deserializer.hpp>
 #include <duckdb/parser/statement/logical_plan_statement.hpp>
 
+#include <yyjson.hpp>
+
 #include <fstream>
 
 #include "state.hpp"
 #include "utils/compatibility.hpp"
+#include "utils/misc.hpp"
 
 namespace duckdb {
 
-// ExecutorException was introduced in 1.1.2, use SerializationException instead
-#if DUCKDB_VERSION_AT_MOST(1, 1, 1)
-using ExecutorException = SerializationException;
-#endif
+namespace utils {
+
+class ComparisonErrorReport {
+public:
+	ComparisonErrorReport(const SQLLogicQuery &slq) {
+		doc = duckdb_yyjson::yyjson_mut_doc_new(NULL);
+		root = duckdb_yyjson::yyjson_mut_obj(doc);
+		duckdb_yyjson::yyjson_mut_doc_set_root(doc, root);
+		SetQueryFields(slq);
+	}
+
+	ComparisonErrorReport(const SQLLogicQuery &slq, const std::string &error_message) : ComparisonErrorReport(slq) {
+		AddString("error", error_message.c_str());
+	}
+
+	~ComparisonErrorReport() {
+		duckdb_yyjson::yyjson_mut_doc_free(doc);
+		doc = nullptr;
+		root = nullptr;
+	}
+
+	void AddString(const char *key, const char *value) {
+		duckdb_yyjson::yyjson_mut_obj_add_strcpy(doc, root, key, value);
+	}
+
+	void AddInt(const char *key, int64_t value) {
+		duckdb_yyjson::yyjson_mut_obj_add_int(doc, root, key, value);
+	}
+
+	std::string ToString(bool pretty = false) {
+		size_t flags = pretty ? duckdb_yyjson::YYJSON_WRITE_PRETTY : 0;
+		char *json = duckdb_yyjson::yyjson_mut_write(doc, flags, NULL);
+		if (!json) {
+			return "{\"error\": \"Failed to serialize JSON report!\"}";
+		}
+
+		std::string result(json);
+		free((void *)json);
+		return result;
+	}
+
+private:
+	void SetQueryFields(const SQLLogicQuery &slq) {
+		AddString("query", slq.query.c_str());
+		AddString("uuid", UUIDToString(slq.uuid).c_str());
+		AddInt("idx", slq.query_idx);
+	}
+
+	duckdb_yyjson::yyjson_mut_doc *doc;
+	duckdb_yyjson::yyjson_mut_val *root;
+};
+
+class ReportWriter {
+public:
+	ReportWriter(const std::string &_filename) : filename(_filename) {
+	}
+
+	void WriteItem(const std::string &item) {
+		if (!writer) {
+			writer = make_uniq<std::ofstream>(filename, std::ios::out | std::ios::trunc);
+			(*writer) << "[\n";
+		} else {
+			(*writer) << ",\n";
+		}
+
+		(*writer) << item;
+	}
+
+	~ReportWriter() {
+		if (writer) {
+			(*writer) << "\n]\n";
+			writer->close();
+			writer.reset();
+		}
+	}
+
+private:
+	const std::string &filename;
+	std::unique_ptr<std::ofstream> writer;
+};
+
+} // namespace utils
 
 SerializedResult DeserializeResult(BufferedFileReader &);
-void DoSimpleCompareResults(const SerializedResult &, const SerializedResult &, const SQLLogicQuery &,
-                            bool do_compare_values = true);
-void DoCompareSortedResults(ClientContext &, const SerializedResult &, const SerializedResult &, const SQLLogicQuery &);
+std::unique_ptr<utils::ComparisonErrorReport> DoSimpleCompareResults(const SerializedResult &, const SerializedResult &,
+                                                                     const SQLLogicQuery &,
+                                                                     bool do_compare_values = true);
+std::unique_ptr<utils::ComparisonErrorReport> DoCompareSortedResults(ClientContext &, const SerializedResult &,
+                                                                     const SerializedResult &, const SQLLogicQuery &);
 
 bool AreRowsEquals(const DataChunk &lchunk, const DataChunk &rchunk, idx_t lrow_idx, idx_t rrow_idx);
 
@@ -30,6 +113,8 @@ bool CompareResults(ClientContext &context, const vector<Value> &params) {
 	ReloadResults(context, params);
 
 	BufferedFileReader file_reader(context.db->GetFileSystem(), input_file.c_str());
+	const std::string report_filename = input_file + ".report";
+	utils::ReportWriter report_writer(report_filename);
 
 	BinaryDeserializer deserializer(file_reader);
 	deserializer.Begin();
@@ -52,12 +137,18 @@ bool CompareResults(ClientContext &context, const vector<Value> &params) {
 		}
 
 		auto &in_mem_result = state.GetResult(file_result->uuid);
+		std::unique_ptr<utils::ComparisonErrorReport> comparison_error;
 		if (in_mem_query.flags.sort_style == SortStyle::NO_SORT) {
-			DoSimpleCompareResults(in_mem_result, *file_result, in_mem_query);
+			comparison_error = DoSimpleCompareResults(in_mem_result, *file_result, in_mem_query);
 		} else {
-			DoCompareSortedResults(context, in_mem_result, *file_result, in_mem_query);
+			comparison_error = DoCompareSortedResults(context, in_mem_result, *file_result, in_mem_query);
+		}
+
+		if (comparison_error) {
+			report_writer.WriteItem(comparison_error->ToString());
 		}
 	}
+
 	return true;
 }
 
@@ -91,67 +182,78 @@ void ReloadResults(ClientContext &context, const vector<Value> &params) {
 	}
 }
 
-void DoSimpleCompareResults(const SerializedResult &in_mem_result, const SerializedResult &file_result,
-                            const SQLLogicQuery &squery, bool do_compare_values) {
+std::unique_ptr<utils::ComparisonErrorReport> DoSimpleCompareResults(const SerializedResult &in_mem_result,
+                                                                     const SerializedResult &file_result,
+                                                                     const SQLLogicQuery &squery,
+                                                                     bool do_compare_values) {
+	// First make sure that they either both succeeded or both failed
 	if (in_mem_result.success != file_result.success) {
-		std::ostringstream oss;
-		oss << "Query '" << squery.query << "' results mismatch: in-memory result is ";
-
 		if (in_mem_result.success) {
-			oss << "successful but file result is not: ";
-			oss << file_result.error.Message();
-		} else {
-			oss << "failed but file result is not: ";
-			oss << in_mem_result.error.Message();
+			auto report =
+			    make_uniq<utils::ComparisonErrorReport>(squery, "Expected result to be successful but it failed");
+			report->AddString("actual", file_result.error.Message().c_str());
+			return std::move(report);
 		}
-		throw ExecutorException(oss.str());
+
+		auto report = make_uniq<utils::ComparisonErrorReport>(squery, "Expected query to fail but it was successful");
+		report->AddString("expected", in_mem_result.error.Message().c_str());
+		return std::move(report);
 	}
 
+	// If they both failed, compare the error messages
 	if (!in_mem_result.success) {
-		if (!(in_mem_result.error == file_result.error)) {
-			std::ostringstream oss;
-			oss << "Query '" << squery.query << "' results mismatch: error messages differ:\n"
-			    << "In-memory error:\n------------\n"
-			    << in_mem_result.error.Message() << "\n\n------------\nFile error:\n------------\n"
-			    << file_result.error.Message() << std::endl;
-			throw ExecutorException(oss.str());
+		if (in_mem_result.error == file_result.error) {
+			return nullptr;
 		}
-		return;
+
+		auto report = make_uniq<utils::ComparisonErrorReport>(squery, "Results mismatch, error messages differ");
+		report->AddString("expected", in_mem_result.error.Message().c_str());
+		report->AddString("actual", file_result.error.Message().c_str());
+		return std::move(report);
 	}
 
+	// Otherwise, they both succeeded: compare the actual results
 	if (in_mem_result.names != file_result.names) {
 		std::cerr << "Query '" << squery.query << "' results mismatch: names differ:\n";
-		std::cerr << "In-memory names:\n------------\n";
+		std::cerr << "Expected names:\n------------\n";
 		std::cerr << StringUtil::Join(in_mem_result.names, ", ");
-		std::cerr << "\n\n------------\nFile names:\n------------\n";
+		std::cerr << "\n\n------------\nActual names:\n------------\n";
 		std::cerr << StringUtil::Join(file_result.names, ", ") << std::endl;
 		// Don't fail just on names
 		// cf. test/api/serialized_plans/test_plan_serialization_bwc.cpp:113
 	}
 
 	if (in_mem_result.types != file_result.types) {
-		std::ostringstream oss;
-		oss << "Query '" << squery.query << "' results mismatch: types differ:\n";
-		oss << "In-memory types:\n------------\n";
-		for (const auto &type : in_mem_result.types) {
-			oss << type.ToString() << "; ";
+		auto report = make_uniq<utils::ComparisonErrorReport>(squery, "Results types mismatch");
+		{
+			std::ostringstream oss;
+			for (const auto &type : in_mem_result.types) {
+				oss << type.ToString() << "; ";
+			}
+			report->AddString("expected", oss.str().c_str());
 		}
-		oss << "\n\n------------\nFile types:\n------------\n";
-		for (const auto &type : file_result.types) {
-			oss << type.ToString() << "; ";
+
+		{
+			std::ostringstream oss;
+			for (const auto &type : file_result.types) {
+				oss << type.ToString() << "; ";
+			}
+			report->AddString("actual", oss.str().c_str());
 		}
-		throw ExecutorException(oss.str());
+
+		return std::move(report);
 	}
 
 	if (!do_compare_values) {
-		return;
+		return nullptr;
 	}
 
 	if (in_mem_result.chunks.size() == 0) {
 		if (file_result.chunks.size() != 0) {
-			throw ExecutorException("Results mismatch: in-memory result has no chunks but file result has some");
+			return make_uniq<utils::ComparisonErrorReport>(
+			    squery, "Results mismatch: expected result has no chunks but actual result has some");
 		} else {
-			return; // both are empty
+			return nullptr; // both are empty
 		}
 	}
 
@@ -170,11 +272,11 @@ void DoSimpleCompareResults(const SerializedResult &in_mem_result, const Seriali
 				bool has_reached_file_end = file_it != file_result.chunks.end() && file_index == (*file_it)->size();
 				++file_it;
 				if (!has_reached_file_end || file_it != file_result.chunks.end()) {
-					throw ExecutorException("Results mismatch: in-memory result has more chunks than file result");
+					return make_uniq<utils::ComparisonErrorReport>(squery, "Results mismatch: expected more chunks");
 				}
 
 				// All good, results are equal
-				return;
+				return nullptr;
 			}
 
 			in_mem_index = 0;
@@ -185,7 +287,7 @@ void DoSimpleCompareResults(const SerializedResult &in_mem_result, const Seriali
 			++file_it;
 			if (file_it == file_result.chunks.end()) {
 				// We should reach the end only above.
-				throw ExecutorException("Results mismatch: file result has more chunks than in-memory result");
+				return make_uniq<utils::ComparisonErrorReport>(squery, "Results mismatch: expected less chunks");
 			}
 
 			file_index = 0;
@@ -195,27 +297,28 @@ void DoSimpleCompareResults(const SerializedResult &in_mem_result, const Seriali
 		auto &file_chunk = *file_it;
 
 		if (in_mem_chunk->ColumnCount() != expected_col_count) {
-			throw ExecutorException("Results mismatch: expected %d columns but got %d in in-memory chunk",
-			                        expected_col_count, in_mem_chunk->ColumnCount());
+			auto report =
+			    make_uniq<utils::ComparisonErrorReport>(squery, "Results mismatch: invalid column in expected chunk");
+			report->AddInt("expected", expected_col_count);
+			report->AddInt("actual", in_mem_chunk->ColumnCount());
+			return std::move(report);
 		}
 
 		if (file_chunk->ColumnCount() != expected_col_count) {
-			throw ExecutorException("Results mismatch: expected %d columns but got %d in file chunk",
-			                        expected_col_count, file_chunk->ColumnCount());
+			auto report =
+			    make_uniq<utils::ComparisonErrorReport>(squery, "Results mismatch: invalid column in actual chunk");
+			report->AddInt("expected", expected_col_count);
+			report->AddInt("actual", file_chunk->ColumnCount());
+			return std::move(report);
 		}
 
 		if (!AreRowsEquals(*in_mem_chunk, *file_chunk, in_mem_index, file_index)) {
-			std::ostringstream oss;
-			oss << "Query '" << squery.query << "' data chunks differ at index " << in_mem_index;
-			if (in_mem_index != file_index) {
-				oss << " and " << file_index;
-			}
-			oss << "\n";
-			oss << "In-memory chunk:\n------------\n";
-			oss << in_mem_chunk->ToString();
-			oss << "\n\n------------\nFile chunk:\n------------\n";
-			oss << file_chunk->ToString();
-			throw ExecutorException(oss.str());
+			auto report = make_uniq<utils::ComparisonErrorReport>(squery, "Results mismatch: data chunks differ");
+			report->AddInt("expected_idx", in_mem_index);
+			report->AddInt("actual_idx", file_index);
+			report->AddString("expected", in_mem_chunk->ToString().c_str());
+			report->AddString("actual", file_chunk->ToString().c_str());
+			return std::move(report);
 		}
 
 		++in_mem_index;
@@ -326,23 +429,31 @@ vector<string> StringifyAndSortResults(ClientContext &context, const SerializedR
 	return result_values_string;
 }
 
-void DoCompareSortedResults(ClientContext &context, const SerializedResult &in_mem_result,
-                            const SerializedResult &file_result, const SQLLogicQuery &query) {
+std::unique_ptr<utils::ComparisonErrorReport> DoCompareSortedResults(ClientContext &context,
+                                                                     const SerializedResult &in_mem_result,
+                                                                     const SerializedResult &file_result,
+                                                                     const SQLLogicQuery &query) {
 	// No need to compare values if something else differs before.
-	DoSimpleCompareResults(in_mem_result, file_result, query, false);
+	auto error = DoSimpleCompareResults(in_mem_result, file_result, query, false);
+	if (error) {
+		return error;
+	}
 
 	auto in_mem_sorted_results = StringifyAndSortResults(context, in_mem_result, query);
 	auto file_sorted_results = StringifyAndSortResults(context, file_result, query);
 
 	for (size_t i = 0; i < in_mem_sorted_results.size(); ++i) {
 		if (in_mem_sorted_results[i] != file_sorted_results[i]) {
-			std::ostringstream oss;
-			oss << "Results mismatch: values differ at index " << i << ":\n";
-			oss << "In-memory:" << in_mem_sorted_results[i] << "\n";
-			oss << "File value: " << file_sorted_results[i] << "\n";
-			throw ExecutorException(oss.str());
+			auto report = make_uniq<utils::ComparisonErrorReport>(query, "Results mismatch: values differ");
+			report->AddInt("expected_idx", i);
+			report->AddInt("actual_idx", i);
+			report->AddString("expected", in_mem_sorted_results[i].c_str());
+			report->AddString("actual", file_sorted_results[i].c_str());
+			return std::move(report);
 		}
 	}
+
+	return nullptr;
 }
 
 } // namespace duckdb

@@ -11,22 +11,27 @@
 #include "utils/logger.hpp"
 #include "utils/misc.hpp"
 
-#include <duckdb/parser/parser.hpp>
-#include <duckdb/planner/planner.hpp>
+#include "utils/compatibility.hpp"
+
 #include <duckdb/common/serializer/binary_serializer.hpp>
-#include <duckdb/common/types/uuid.hpp>
 #include <duckdb/common/serializer/memory_stream.hpp>
+#include <duckdb/common/types/uuid.hpp>
+#include <duckdb/parser/parser.hpp>
+#include <duckdb/parser/parsed_data/transaction_info.hpp>
 #include <duckdb/parser/statement/logical_plan_statement.hpp>
-#include <duckdb/planner/operator/logical_get.hpp>
 #include <duckdb/planner/operator/logical_aggregate.hpp>
+#include <duckdb/planner/operator/logical_get.hpp>
+#include <duckdb/planner/operator/logical_limit.hpp>
 #include <duckdb/planner/operator/logical_pragma.hpp>
 #include <duckdb/planner/operator/logical_set.hpp>
-#include <duckdb/planner/operator/logical_limit.hpp>
+#include <duckdb/planner/operator/logical_simple.hpp>
+#include <duckdb/planner/planner.hpp>
 
 namespace duckdb {
 
 static void SerializeQueryStatements(Connection &con, BinarySerializer &serializer, SQLLogicQuery &current_query,
-                                     TUStorageExtensionInfo &state, Parser &parser);
+                                     TUStorageExtensionInfo &state, Parser &parser,
+                                     TestDrivenTransactionState &test_driven_transaction_state);
 
 bool CanExecuteSerializedPlan(const std::string &, const LogicalOperator &);
 
@@ -92,34 +97,40 @@ bool SerializeQueriesPlansFromFile(ClientContext &context, const vector<Value> &
 	Connection con(*context.db);
 
 	auto &state = TUStorageExtensionInfo::GetState(*context.db);
+	TestDrivenTransactionState test_driven_transaction_state = TestDrivenTransactionState::NONE;
 	// Now run each query and serialize the plan to the output file.
-	for (auto &current_query : queries) {
+	for (auto &slq : queries) {
 		Parser parser;
 		try {
-			parser.ParseQuery(current_query.query);
-			current_query.nb_statements = parser.statements.size();
+			parser.ParseQuery(slq.query);
+			slq.nb_statements = parser.statements.size();
 		} catch (const std::exception &e) {
-			if (current_query.ExpectSuccess()) {
-				LOG_ERROR("Failed to parse query '" << current_query.query << "': " << e.what());
+			if (slq.ExpectSuccess()) {
+				LOG_ERROR("Failed to parse query '" << slq.query << "': " << e.what());
 			}
 
-			current_query.can_deserialize_plan = false;
-			current_query.can_parse_query = false;
+			slq.can_deserialize_plan = false;
+			slq.can_parse_query = false;
 			serializer.Begin();
-			current_query.Serialize(serializer);
+			slq.Serialize(serializer);
 			serializer.End();
 
-			auto result = con.context->Query(current_query.query, false);
-			state.AddQuery(current_query);
-			state.AddResult(make_uniq<SerializedResult>(current_query.uuid, *result));
+			auto result = con.context->Query(slq.query, false);
+			state.AddQuery(slq);
+			state.AddResult(make_uniq<SerializedResult>(slq.uuid, *result));
 			continue;
 		}
 
 		try {
-			SerializeQueryStatements(con, serializer, current_query, state, parser);
+			SerializeQueryStatements(con, serializer, slq, state, parser, test_driven_transaction_state);
 		} catch (const std::exception &e) {
-			LOG_ERROR("Failed to serialize query #" << current_query.query_idx << " '" << current_query.query)
+			LOG_ERROR("Failed to serialize query #" << slq.query_idx << " '" << slq.query << "': " << e.what());
 			throw;
+		}
+
+		if (!slq.load_db_name.empty()) {
+			bool need_tx = test_driven_transaction_state == TestDrivenTransactionState::NONE;
+			UseDBAndDetachOthers(con, slq.load_db_name, need_tx);
 		}
 	}
 
@@ -132,48 +143,87 @@ bool SerializeQueriesPlansFromFile(ClientContext &context, const vector<Value> &
 	return true;
 }
 
-static void SerializeQueryStatements(Connection &con, BinarySerializer &serializer, SQLLogicQuery &current_query,
-                                     TUStorageExtensionInfo &state, Parser &parser) {
-	const auto &query = current_query.query;
+static void SerializeQueryStatements(Connection &con, BinarySerializer &serializer, SQLLogicQuery &slq,
+                                     TUStorageExtensionInfo &state, Parser &parser,
+                                     TestDrivenTransactionState &test_driven_transaction_state) {
+	const auto &query = slq.query;
 	idx_t statement_idx = 0;
-	LOG_INFO("Serializing query with " << parser.statements.size() << " statements: '" << query << "'");
+
+	if (parser.statements.size() > 1) {
+		LOG_INFO("Serializing query " << UUIDToString(slq.uuid) << " with " << parser.statements.size()
+		                              << " statements: '" << query << "'");
+	} else {
+		LOG_INFO("Serializing query " << UUIDToString(slq.uuid) << ": '" << query << "'");
+	}
+
 	for (auto &statement : parser.statements) {
-		con.BeginTransaction();
+		if (test_driven_transaction_state == TestDrivenTransactionState::NONE) {
+			LOG_DEBUG("Beginning new transaction for statement #" << statement_idx << " of query #" << slq.query_idx);
+			con.BeginTransaction();
+		}
+
 		Planner planner(*con.context);
+		slq.can_deserialize_plan = false;
 		try {
 			planner.CreatePlan(std::move(statement));
-			current_query.can_deserialize_plan = !!planner.plan;
+			slq.can_deserialize_plan = !!planner.plan;
 		} catch (const std::exception &e) {
-			if (current_query.ExpectSuccess()) {
+			if (slq.ExpectSuccess()) {
 				LOG_ERROR("Failed to plan query '" << query << "': " << e.what());
 			}
+		}
 
-			current_query.can_deserialize_plan = false;
+		if (slq.can_deserialize_plan) {
+			const auto &op = *planner.plan;
+			const auto type = op.type;
+			LOG_DEBUG("Planned statement #" << statement_idx << " of query #" << slq.query_idx
+			                                << ": plan type=" << LogicalOperatorToString(type));
+
+			// Manually handle transaction statements
+			if (type == LogicalOperatorType::LOGICAL_TRANSACTION) {
+				auto tx_type = op.Cast<LogicalSimple>().info->Cast<TransactionInfo>().type;
+				UpdateTxStateFromTxType(tx_type, test_driven_transaction_state);
+				slq.transaction_type = tx_type;
+			}
+		} else {
+			LOG_DEBUG("Could not plan statement #" << statement_idx << " of query #" << slq.query_idx);
 		}
 
 		// Some queries should not be executed at all (cf. `ShouldSkipQuery`)
-		current_query.should_skip_query = current_query.can_deserialize_plan && ShouldSkipQuery(*planner.plan);
+		slq.should_skip_query = !!planner.plan && ShouldSkipQuery(*planner.plan);
 
 		// Some don't serialize well, so execute them directly from SQL
-		current_query.can_deserialize_plan = !current_query.should_skip_query && current_query.can_deserialize_plan &&
-		                                     CanExecuteSerializedPlan(query, *planner.plan);
+		slq.can_deserialize_plan =
+		    !slq.should_skip_query && !!planner.plan && CanExecuteSerializedPlan(query, *planner.plan);
 
-		if (parser.statements.size() > 1 && !current_query.can_deserialize_plan && statement_idx > 0) {
+		if (parser.statements.size() > 1 && !slq.can_deserialize_plan && statement_idx > 0) {
 			throw InternalException(
 			    "Cannot serialize query with multiple statements when subsequent statement cannot be serialized");
 		}
 
 		serializer.Begin();
-		current_query.Serialize(serializer);
+		slq.Serialize(serializer);
 		serializer.End();
-		state.AddQuery(current_query);
+		state.AddQuery(slq);
 
-		if (current_query.should_skip_query) {
-			con.Rollback();
+		if (slq.should_skip_query) {
+			auto result = make_uniq<SerializedResult>(slq.uuid);
+			try {
+				UpdateTxStateAfterStatement(con, test_driven_transaction_state, true);
+			} catch (const Exception &e) {
+				if (slq.ExpectSuccess()) {
+					throw;
+				}
+
+				result->error = ErrorData(e);
+				result->success = false;
+			}
+
+			state.AddResult(std::move(result));
 			continue;
 		}
 
-		if (current_query.can_deserialize_plan) {
+		if (slq.can_deserialize_plan) {
 			serializer.Begin();
 			planner.plan->Serialize(serializer);
 			serializer.End();
@@ -184,7 +234,7 @@ static void SerializeQueryStatements(Connection &con, BinarySerializer &serializ
 			unique_ptr<QueryResult> result;
 			// Some statements raise an error when executed, from the serialization plan
 			auto type = LogicalOperatorType::LOGICAL_INVALID;
-			if (current_query.can_deserialize_plan) {
+			if (slq.can_deserialize_plan) {
 				// If we can deserialize the plan, we execute it
 				type = planner.plan->type;
 				planner.plan->ResolveOperatorTypes();
@@ -193,17 +243,27 @@ static void SerializeQueryStatements(Connection &con, BinarySerializer &serializ
 				result = con.context->Query(query, false);
 			}
 
-			if (result->HasError() && current_query.ExpectSuccess()) {
-				LOG_ERROR("Query '" << query << "' type='" << LogicalOperatorToString(type)
-				                    << "' failed with message: " << result->GetError());
+			if (result->HasError() && slq.ExpectSuccess()) {
+				LOG_ERROR("Query '" << query << "' type='" << LogicalOperatorToString(type) << "', executed from "
+				                    << (slq.can_deserialize_plan ? "plan" : "SQL")
+				                    << " failed with message: " << result->GetError());
+			} else if (!result->HasError() && !slq.ExpectSuccess()) {
+				LOG_ERROR("Query '" << query << "' type='" << LogicalOperatorToString(type) << "', executed from "
+				                    << (slq.can_deserialize_plan ? "plan" : "SQL")
+				                    << " succeeded but was expected to fail.");
+			} else {
+				LOG_DEBUG("Executed statement #"
+				          << statement_idx << " of query #" << slq.query_idx << " from "
+				          << (slq.can_deserialize_plan ? "plan" : "SQL")
+				          << (slq.ExpectSuccess() ? " successfully." : " with expected failure."));
 			}
 
-			state.AddResult(make_uniq<SerializedResult>(current_query.uuid, *result));
+			state.AddResult(make_uniq<SerializedResult>(slq.uuid, *result));
 		}
 
-		con.Commit();
+		UpdateTxStateAfterStatement(con, test_driven_transaction_state);
 
-		if (!current_query.can_deserialize_plan) {
+		if (!slq.can_deserialize_plan) {
 			// At this point we would have executed the whole query so we must not try to serialized further
 			// statements
 			break;

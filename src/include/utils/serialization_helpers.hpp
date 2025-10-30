@@ -1,10 +1,12 @@
 #pragma once
 
 #include <map>
+
 #include <duckdb/common/enums/logical_operator_type.hpp>
 #include <duckdb/common/serializer/memory_stream.hpp>
 #include <duckdb/common/types/data_chunk.hpp>
 #include <duckdb/main/query_result.hpp>
+#include <duckdb/parser/parsed_data/transaction_info.hpp>
 
 namespace duckdb {
 
@@ -16,9 +18,9 @@ struct SerializedPlan {
 struct SerializedResult {
 	SerializedResult() = default;
 	SerializedResult(const hugeint_t &, QueryResult &query_result);
+	explicit SerializedResult(const hugeint_t &);
 
 	void Serialize(Serializer &serializer) const;
-	static void SerializeSkipped(Serializer &serializer);
 	static unique_ptr<SerializedResult> Deserialize(Deserializer &deserializer);
 
 	idx_t RowCount() const;
@@ -55,9 +57,11 @@ public:
 	bool ExpectSuccess() const;
 
 	string query;
+	TransactionType transaction_type = TransactionType::INVALID;
 	bool can_parse_query = true;
 	bool should_skip_query = false;
 	bool can_deserialize_plan = true;
+	string load_db_name;
 	uint32_t nb_statements;
 	uint32_t query_idx;
 	hugeint_t uuid;

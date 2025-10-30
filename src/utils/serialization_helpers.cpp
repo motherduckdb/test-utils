@@ -6,8 +6,8 @@
 
 namespace duckdb {
 
-SerializedResult::SerializedResult(const hugeint_t &_uuid, QueryResult &query_result) {
-	uuid = _uuid;
+SerializedResult::SerializedResult(const hugeint_t &_uuid, QueryResult &query_result) : SerializedResult(_uuid) {
+	is_skipped = false;
 	success = !query_result.HasError();
 	if (!success) {
 		error = query_result.GetErrorObject();
@@ -27,10 +27,20 @@ SerializedResult::SerializedResult(const hugeint_t &_uuid, QueryResult &query_re
 	}
 }
 
+SerializedResult::SerializedResult(const hugeint_t &_uuid) {
+	uuid = _uuid;
+	is_skipped = true;
+}
+
 void SerializedResult::Serialize(Serializer &serializer) const {
 	auto n = 200;
-	serializer.WriteProperty(++n, "is_skipped", false);
-	serializer.WriteProperty(++n, "uuid", uuid);
+	serializer.WriteProperty(n, "uuid", uuid);
+	serializer.WriteProperty(++n, "is_skipped", is_skipped);
+
+	if (is_skipped) {
+		return;
+	}
+
 	serializer.WriteProperty(++n, "success", success);
 
 	if (success) {
@@ -49,19 +59,14 @@ void SerializedResult::Serialize(Serializer &serializer) const {
 	}
 }
 
-void SerializedResult::SerializeSkipped(Serializer &serializer) {
-	serializer.WriteProperty(201, "is_skipped", true);
-}
-
 unique_ptr<SerializedResult> SerializedResult::Deserialize(Deserializer &deserializer) {
 	auto result = make_uniq<SerializedResult>();
 	auto n = 200;
+	result->uuid = deserializer.ReadProperty<hugeint_t>(n, "uuid");
 	result->is_skipped = deserializer.ReadProperty<bool>(++n, "is_skipped");
 	if (result->is_skipped) {
 		return result;
 	}
-
-	result->uuid = deserializer.ReadProperty<hugeint_t>(++n, "uuid");
 
 	result->success = deserializer.ReadProperty<bool>(++n, "success");
 	if (!result->success) {
@@ -137,6 +142,11 @@ SQLLogicQuery::SQLLogicQuery(const string &_query, const uint32_t _query_idx, co
 			flags.expected_result_type = ExpectedResultType::UNKNOWN;
 		}
 	}
+
+	it = _flags.find("load_db");
+	if (it != _flags.end()) {
+		load_db_name = it->second;
+	}
 }
 
 bool SQLLogicQuery::ExpectSuccess() const {
@@ -152,6 +162,7 @@ void SQLLogicQuery::Serialize(Serializer &serializer) const {
 	serializer.WriteProperty(++n, "should_skip_query", should_skip_query);
 	serializer.WriteProperty(++n, "can_deserialize_plan", can_deserialize_plan);
 	serializer.WriteProperty(++n, "nb_statements", nb_statements);
+	serializer.WriteProperty(++n, "transaction_type", transaction_type);
 
 	// Write flags
 	serializer.WriteProperty(++n, "expected_result_type", static_cast<uint8_t>(flags.expected_result_type));
@@ -167,7 +178,8 @@ unique_ptr<SQLLogicQuery> SQLLogicQuery::Deserialize(Deserializer &deserializer)
 	query->can_parse_query = deserializer.ReadProperty<bool>(++n, "can_parse_query");
 	query->should_skip_query = deserializer.ReadProperty<bool>(++n, "should_skip_query");
 	query->can_deserialize_plan = deserializer.ReadProperty<bool>(++n, "can_deserialize_plan");
-	query->nb_statements = deserializer.ReadProperty<bool>(++n, "nb_statements");
+	query->nb_statements = deserializer.ReadProperty<uint32_t>(++n, "nb_statements");
+	query->transaction_type = deserializer.ReadProperty<TransactionType>(++n, "transaction_type");
 
 	// Read flags
 	query->flags.expected_result_type =
