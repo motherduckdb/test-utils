@@ -4,6 +4,8 @@
 #include <duckdb/common/serializer/binary_deserializer.hpp>
 
 #include "state.hpp"
+#include "utils/logger.hpp"
+#include "utils/misc.hpp"
 
 namespace duckdb {
 bool SerializeResults(ClientContext &context, const vector<Value> &params) {
@@ -28,6 +30,8 @@ bool SerializeResults(ClientContext &context, const vector<Value> &params) {
 		deserializer.Begin();
 		auto file_result = SerializedResult::Deserialize(deserializer);
 		deserializer.End();
+
+		LOG_DEBUG("Serializing result for query #" << i << " (" << UUIDToString(file_result->uuid) << ")");
 
 		auto &in_mem_query = state.GetQuery(file_result->uuid);
 		serializer.Begin();

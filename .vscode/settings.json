@@ -58,6 +58,10 @@
     "regex": "cpp",
     "fstream": "cpp",
     "iomanip": "cpp",
-    "algorithm": "cpp"
+    "algorithm": "cpp",
+    "cstddef": "cpp",
+    "complex": "cpp",
+    "type_traits": "cpp",
+    "future": "cpp"
   }
 }
