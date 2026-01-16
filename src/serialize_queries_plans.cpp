@@ -149,7 +149,8 @@ static void SerializeQueryStatements(Connection &con, BinarySerializer &serializ
 
 	for (auto &statement : parser.statements) {
 		if (test_driven_transaction_state == TestDrivenTransactionState::NONE) {
-			LOG_DEBUG("Beginning new implicit transaction for statement #" << statement_idx << " of query #" << slq.query_idx);
+			LOG_DEBUG("Beginning new implicit transaction for statement #" << statement_idx << " of query #"
+			                                                               << slq.query_idx);
 			con.BeginTransaction();
 		}
 
