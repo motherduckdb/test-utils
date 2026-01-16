@@ -19,11 +19,6 @@
 #include <duckdb/parser/parser.hpp>
 #include <duckdb/parser/parsed_data/transaction_info.hpp>
 #include <duckdb/parser/statement/logical_plan_statement.hpp>
-#include <duckdb/planner/operator/logical_aggregate.hpp>
-#include <duckdb/planner/operator/logical_get.hpp>
-#include <duckdb/planner/operator/logical_limit.hpp>
-#include <duckdb/planner/operator/logical_pragma.hpp>
-#include <duckdb/planner/operator/logical_set.hpp>
 #include <duckdb/planner/operator/logical_simple.hpp>
 #include <duckdb/planner/planner.hpp>
 
@@ -32,10 +27,6 @@ namespace duckdb {
 static void SerializeQueryStatements(Connection &con, BinarySerializer &serializer, SQLLogicQuery &current_query,
                                      TUStorageExtensionInfo &state, Parser &parser,
                                      TestDrivenTransactionState &test_driven_transaction_state);
-
-bool CanExecuteSerializedPlan(const std::string &, const LogicalOperator &);
-
-bool ShouldSkipQuery(const LogicalOperator &op);
 
 constexpr const char *tag_prefix = "-- bwc_tag:";
 
@@ -158,22 +149,22 @@ static void SerializeQueryStatements(Connection &con, BinarySerializer &serializ
 
 	for (auto &statement : parser.statements) {
 		if (test_driven_transaction_state == TestDrivenTransactionState::NONE) {
-			LOG_DEBUG("Beginning new transaction for statement #" << statement_idx << " of query #" << slq.query_idx);
+			LOG_DEBUG("Beginning new implicit transaction for statement #" << statement_idx << " of query #" << slq.query_idx);
 			con.BeginTransaction();
 		}
 
 		Planner planner(*con.context);
-		slq.can_deserialize_plan = false;
+		bool plan_created = false;
 		try {
 			planner.CreatePlan(std::move(statement));
-			slq.can_deserialize_plan = !!planner.plan;
+			plan_created = !!planner.plan;
 		} catch (const std::exception &e) {
 			if (slq.ExpectSuccess()) {
 				LOG_ERROR("Failed to plan query '" << query << "': " << e.what());
 			}
 		}
 
-		if (slq.can_deserialize_plan) {
+		if (plan_created) {
 			const auto &op = *planner.plan;
 			const auto type = op.type;
 			LOG_DEBUG("Planned statement #" << statement_idx << " of query #" << slq.query_idx
@@ -189,12 +180,8 @@ static void SerializeQueryStatements(Connection &con, BinarySerializer &serializ
 			LOG_DEBUG("Could not plan statement #" << statement_idx << " of query #" << slq.query_idx);
 		}
 
-		// Some queries should not be executed at all (cf. `ShouldSkipQuery`)
-		slq.should_skip_query = !!planner.plan && ShouldSkipQuery(*planner.plan);
-
-		// Some don't serialize well, so execute them directly from SQL
-		slq.can_deserialize_plan =
-		    !slq.should_skip_query && !!planner.plan && CanExecuteSerializedPlan(query, *planner.plan);
+		// If planning failed, we also can't deserialize
+		slq.can_deserialize_plan = slq.can_deserialize_plan && !slq.should_skip_query && plan_created;
 
 		if (parser.statements.size() > 1 && !slq.can_deserialize_plan && statement_idx > 0) {
 			throw InternalException(
@@ -271,164 +258,6 @@ static void SerializeQueryStatements(Connection &con, BinarySerializer &serializ
 
 		++statement_idx;
 	}
-}
-
-bool PlanContains(const LogicalOperator &plan, bool (*predicate)(const LogicalOperator &)) {
-	if (predicate(plan)) {
-		return true;
-	}
-	for (const auto &child : plan.children) {
-		if (PlanContains(*child, predicate)) {
-			return true;
-		}
-	}
-	return false;
-}
-
-/* ------------------------------------------------------------------------ *
- * ShouldSkipQuery - Check whether a given query should be skipped entirely *
- * ------------------------------------------------------------------------ */
-
-bool ShouldSkipQuery(const LogicalOperator &op) {
-	switch (op.type) {
-	case LogicalOperatorType::LOGICAL_TRANSACTION:
-		// We're not testing transaction semantics
-		return true;
-	case LogicalOperatorType::LOGICAL_PRAGMA: {
-		auto &pragma_op = op.Cast<LogicalPragma>();
-		if (pragma_op.info) {
-			auto &name = pragma_op.info->function.name;
-			if (name == "enable_verification" || name == "verify_external") {
-				// This causes queries to fail with 'Not implemented Error: PLAN_STATEMENT'
-				return true;
-			}
-		}
-		break;
-	}
-	case LogicalOperatorType::LOGICAL_SET: {
-		auto &set_op = op.Cast<LogicalSet>();
-		if (set_op.name == "threads" || set_op.name == "threads") {
-			// Running `SET thread` - or `RESET threads` in the serializing function will sometimes cause
-			// `std::__1::system_error: thread::join failed` error. We're not testing
-			// thread settings here, so we can skip these queries.
-			return true;
-		}
-		break;
-	}
-	default:
-		break;
-	}
-
-	return false;
-}
-
-/* ---------------------------------------------------------------------
- * CanExecuteSerializedPlan
- *
- * Determine for a given plan whether we can:
- *    - serialize it
- *    - deserialize it
- *    - execute it
- * --------------------------------------------------------------------- */
-
-bool IsNonExecutableSerializedExpression(const BaseExpression &expr) {
-	// TODO - properly traverse expression and find functions by name
-	auto expr_name = expr.GetName();
-	if (
-	    // INTERNAL Error: Attempting to commit a transaction that is read-only but has made changes - this should
-	    // not be possible
-	    expr_name.find("nextval(") != string::npos
-	    // Not implemented Error: FIXME: export state serialize
-	    || expr_name.find("finalize(") != string::npos) {
-		return true;
-	}
-	return false;
-}
-
-bool HasNonExecutableSerializedExpression(const LogicalOperator &op) {
-	for (const auto &expr : op.expressions) {
-		if (IsNonExecutableSerializedExpression(*expr)) {
-			return true;
-		}
-	}
-	return false;
-}
-
-bool IsNonExecutableSerializedBoundLimitNode(const BoundLimitNode &op) {
-	if (op.Type() == LimitNodeType::EXPRESSION_VALUE) {
-		return IsNonExecutableSerializedExpression(op.GetValueExpression());
-	} else if (op.Type() == LimitNodeType::EXPRESSION_PERCENTAGE) {
-		return IsNonExecutableSerializedExpression(op.GetPercentageExpression());
-	}
-	return false;
-}
-
-bool IsNonExecutableSerializedLogicalOperator(const LogicalOperator &op) {
-	switch (op.type) {
-	// DuckSchemaEntry::AddEntryInternal called but this database is not marked as modified
-	case LogicalOperatorType::LOGICAL_CREATE_TABLE:
-	case LogicalOperatorType::LOGICAL_CREATE_INDEX:
-	case LogicalOperatorType::LOGICAL_CREATE_MACRO:
-	case LogicalOperatorType::LOGICAL_CREATE_SEQUENCE:
-	case LogicalOperatorType::LOGICAL_CREATE_TYPE:
-
-	// Attempting to do catalog changes on a transaction that is read-only - this should not be possible
-	case LogicalOperatorType::LOGICAL_ALTER:
-	case LogicalOperatorType::LOGICAL_CREATE_SCHEMA:
-
-	// Attempting to commit a transaction that is read-only but has made changes - this should not be possible
-	case LogicalOperatorType::LOGICAL_DELETE:
-	case LogicalOperatorType::LOGICAL_DROP:
-	case LogicalOperatorType::LOGICAL_INSERT:
-	case LogicalOperatorType::LOGICAL_UPDATE:
-
-	// Not implemented Error: PLAN_STATEMENT
-	case LogicalOperatorType::LOGICAL_CREATE_VIEW:
-
-	// Serialization Error: Unsupported type for deserialization of LogicalOperator!
-	case LogicalOperatorType::LOGICAL_PRAGMA:
-	case LogicalOperatorType::LOGICAL_PREPARE:
-	case LogicalOperatorType::LOGICAL_EXECUTE:
-	case LogicalOperatorType::LOGICAL_CREATE_SECRET:
-		return true;
-
-	case LogicalOperatorType::LOGICAL_LIMIT: {
-		auto &op_limit = op.Cast<LogicalLimit>();
-		return IsNonExecutableSerializedBoundLimitNode(op_limit.limit_val) ||
-		       IsNonExecutableSerializedBoundLimitNode(op_limit.offset_val);
-	}
-
-	case LogicalOperatorType::LOGICAL_GET: {
-		auto &op_get = op.Cast<LogicalGet>();
-		return op_get.GetName() == "DBGEN" // CALL dbgen(...) DuckSchemaEntry::AddEntryInternal called but this database
-		                                   // is not marked as modified
-		       || op_get.GetName() == "DSDGEN"   // CALL dbgen(...) DuckSchemaEntry::AddEntryInternal called but this
-		                                         // database is not marked as modified
-		       || op_get.GetName() == "READ_CSV" // Not implemented Error: CSVReaderSerialize not implemented
-		       || op_get.GetName() == "READ_CSV_AUTO"     // Not implemented Error: CSVReaderSerialize not implemented
-		       || op_get.GetName() == "READ_JSON"         // Not implemented Error: JSONScan Serialize not implemented
-		       || op_get.GetName() == "READ_JSON_AUTO"    // Not implemented Error: JSONScan Serialize not implemented
-		       || op_get.GetName() == "READ_JSON_OBJECTS" // Not implemented Error: JSONScan Serialize not implemented
-		       ||
-		       op_get.GetName() == "READ_JSON_OBJECTS_AUTO" // Not implemented Error: JSONScan Serialize not implemented
-		       || op_get.GetName() == "READ_NDJSON"         // Not implemented Error: JSONScan Serialize not implemented
-		       || op_get.GetName() == "READ_NDJSON_OBJECTS" // Not implemented Error: JSONScan Serialize not implemented
-		       || op_get.GetName() == "READ_NDJSON_AUTO";   // Not implemented Error: JSONScan Serialize not implemented
-	}
-	default:
-		return false;
-	}
-}
-
-bool CanExecuteSerializedPlan(const std::string &query, const LogicalOperator &plan) {
-	if (query.find("EXPORT_STATE") != string::npos) {
-		// TODO: traverse expression tree and find the EXPORT_STATE flag
-		return false; // Not implemented Error: FIXME: export state serialize
-	}
-
-	// Detect known patterns
-	return !PlanContains(plan, &IsNonExecutableSerializedLogicalOperator) &&
-	       !PlanContains(plan, &HasNonExecutableSerializedExpression);
 }
 
 } // namespace duckdb

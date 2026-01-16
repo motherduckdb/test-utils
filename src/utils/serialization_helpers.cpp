@@ -147,6 +147,18 @@ SQLLogicQuery::SQLLogicQuery(const string &_query, const uint32_t _query_idx, co
 	if (it != _flags.end()) {
 		load_db_name = it->second;
 	}
+
+	// skip_query: query should be skipped entirely
+	it = _flags.find("skip_query");
+	if (it != _flags.end()) {
+		should_skip_query = true;
+	}
+
+	// execute_from_sql: query can't be serialized, execute from SQL text
+	it = _flags.find("execute_from_sql");
+	if (it != _flags.end()) {
+		can_deserialize_plan = false;
+	}
 }
 
 bool SQLLogicQuery::ExpectSuccess() const {
