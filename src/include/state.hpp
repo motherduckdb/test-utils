@@ -29,11 +29,14 @@ public:
 
 	const SQLLogicQuery &GetQuery(hugeint_t uuid);
 
+	const std::vector<hugeint_t> &GetOrderedResultsUuids() const;
+
 private:
 	std::mutex mutex;
 	std::queue<SerializedPlan> plans;
 	std::map<hugeint_t, SQLLogicQuery> queries;
 	std::map<hugeint_t, unique_ptr<SerializedResult>> results;
+	std::vector<hugeint_t> ordered_results_uuids;
 };
 
 } // namespace duckdb

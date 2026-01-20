@@ -39,6 +39,7 @@ bool TUStorageExtensionInfo::HasPlan() {
 
 void TUStorageExtensionInfo::AddResult(unique_ptr<SerializedResult> &&result) {
 	std::lock_guard<std::mutex> lock(mutex);
+	ordered_results_uuids.push_back(result->uuid);
 	results.emplace(result->uuid, std::move(result));
 }
 
@@ -54,6 +55,10 @@ const SerializedResult &TUStorageExtensionInfo::GetResult(hugeint_t uuid) {
 		throw InternalException("No result found for '%s'", UUIDToString(uuid));
 	}
 	return *it->second;
+}
+
+const std::vector<hugeint_t> &TUStorageExtensionInfo::GetOrderedResultsUuids() const {
+	return ordered_results_uuids;
 }
 
 const SQLLogicQuery &TUStorageExtensionInfo::GetQuery(hugeint_t uuid) {

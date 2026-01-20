@@ -36,7 +36,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 	REGISTER_TF("execute_all_plans_from_file", ExecuteAllPlansFromFile, 2);
 	REGISTER_TF("compare_results", CompareResults, 1);
 	REGISTER_TF("compare_results", CompareResults, 2);
-	REGISTER_TF("serialize_results", SerializeResults, 2);
+	REGISTER_TF("serialize_results", SerializeResults, 1);
 }
 
 #if DUCKDB_VERSION_AT_MOST(1, 3, 2)

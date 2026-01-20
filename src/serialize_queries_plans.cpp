@@ -203,6 +203,8 @@ static void SerializeQueryStatements(Connection &con, BinarySerializer &serializ
 					throw;
 				}
 
+				std::cout << "Skipping query #" << slq.query_idx
+				          << " resulted in error during transaction state update: " << e.what() << std::endl;
 				result->error = ErrorData(e);
 				result->success = false;
 			}

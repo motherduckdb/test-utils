@@ -8,37 +8,30 @@
 #include "utils/misc.hpp"
 
 namespace duckdb {
-bool SerializeResults(ClientContext &context, const vector<Value> &params) {
-	const auto input_file = params[0].GetValue<string>();
-	const auto output_file = params[1].GetValue<string>();
 
-	BufferedFileReader file_reader(context.db->GetFileSystem(), input_file.c_str());
+bool SerializeResults(ClientContext &context, const vector<Value> &params) {
+	const auto output_file = params[0].GetValue<string>();
+
 	BufferedFileWriter file_writer(context.db->GetFileSystem(), output_file);
 
-	BinaryDeserializer deserializer(file_reader);
-	deserializer.Begin();
-	auto count = deserializer.ReadProperty<int32_t>(100, "count");
-	deserializer.End();
+	auto &state = TUStorageExtensionInfo::GetState(*context.db);
+	const auto &results_uuids = state.GetOrderedResultsUuids();
+
+	const int32_t count = static_cast<int32_t>(results_uuids.size());
 
 	BinarySerializer serializer(file_writer);
 	serializer.Begin();
 	serializer.WriteProperty(100, "count", count);
 	serializer.End();
 
-	auto &state = TUStorageExtensionInfo::GetState(*context.db);
-	for (int32_t i = 0; i < count; ++i) {
-		deserializer.Begin();
-		auto file_result = SerializedResult::Deserialize(deserializer);
-		deserializer.End();
-
-		LOG_DEBUG("Serializing result for query #" << i << " (" << UUIDToString(file_result->uuid) << ")");
-
-		auto &in_mem_query = state.GetQuery(file_result->uuid);
+	for (const auto &result_uuid : results_uuids) {
+		LOG_DEBUG("Serializing result for query # " << UUIDToString(result_uuid) << ")");
+		auto &in_mem_query = state.GetQuery(result_uuid);
 		serializer.Begin();
 		in_mem_query.Serialize(serializer);
 		serializer.End();
 
-		auto &in_mem_result = state.GetResult(file_result->uuid);
+		auto &in_mem_result = state.GetResult(result_uuid);
 		serializer.Begin();
 		in_mem_result.Serialize(serializer);
 		serializer.End();
