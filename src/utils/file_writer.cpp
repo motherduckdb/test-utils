@@ -6,7 +6,7 @@ namespace duckdb {
 
 TUFileWriter::TUFileWriter(ClientContext &context, const string &output_file)
     : BufferedFileWriter(context.db->GetFileSystem(), output_file,
-                         BufferedFileWriter::DEFAULT_OPEN_FLAGS | FileOpenFlags::FILE_FLAGS_APPEND) {
+                         FileFlags::FILE_FLAGS_WRITE | FileOpenFlags::FILE_FLAGS_FILE_CREATE_NEW) {
 }
 
 TUFileWriter::~TUFileWriter() {
