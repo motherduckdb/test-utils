@@ -171,10 +171,6 @@ void ReloadResults(ClientContext &context, const vector<Value> &params) {
 		deserializer.End();
 		state.AddQuery(*query);
 
-		if (query->should_skip_query) {
-			continue;
-		}
-
 		deserializer.Begin();
 		auto result = SerializedResult::Deserialize(deserializer);
 		deserializer.End();
