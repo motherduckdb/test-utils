@@ -9,11 +9,19 @@ namespace duckdb {
 
 TUStorageExtensionInfo &TUStorageExtensionInfo::GetState(const DatabaseInstance &instance) {
 	auto &config = instance.config;
+#if DUCKDB_VERSION_AT_MOST(1, 4, 4)
 	auto it = config.storage_extensions.find(STORAGE_EXTENSION_KEY);
 	if (it == config.storage_extensions.end()) {
 		throw std::runtime_error("Fatal error: couldn't find the UI extension state.");
 	}
 	return *static_cast<TUStorageExtensionInfo *>(it->second->storage_info.get());
+#else
+	auto ext = StorageExtension::Find(config, STORAGE_EXTENSION_KEY);
+	if (!ext) {
+		throw std::runtime_error("Fatal error: couldn't find the UI extension state.");
+	}
+	return *static_cast<TUStorageExtensionInfo *>(ext->storage_info.get());
+#endif
 }
 
 void TUStorageExtensionInfo::PushPlan(SerializedPlan &&plan) {

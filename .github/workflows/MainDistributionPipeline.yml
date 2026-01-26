@@ -165,7 +165,6 @@ jobs:
   duckdb-main:
     name: Build extension binaries (main)
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
-    if: false
     with:
       duckdb_version: main
       ci_tools_version: main
