@@ -243,15 +243,14 @@ static void SerializeQueryStatements(Connection &con, BinarySerializer &serializ
 
 			if (result->HasError() && slq.ExpectSuccess()) {
 				LOG_ERROR("Query '" << query << "'"
-									<< (slq.can_deserialize_plan ? " type='" + LogicalOperatorToString(type) + "'" : "")
-									<< ", executed from "
-				                    << (slq.can_deserialize_plan ? "plan" : "SQL")
-				                    << " failed with message:\n" << result->GetError());
+				                    << (slq.can_deserialize_plan ? " type='" + LogicalOperatorToString(type) + "'" : "")
+				                    << ", executed from " << (slq.can_deserialize_plan ? "plan" : "SQL")
+				                    << " failed with message:\n"
+				                    << result->GetError());
 			} else if (!result->HasError() && !slq.ExpectSuccess()) {
 				LOG_ERROR("Query '" << query << "'"
-									<< (slq.can_deserialize_plan ? " type='" + LogicalOperatorToString(type) + "'" : "")
-									<< ", executed from "
-				                    << (slq.can_deserialize_plan ? "plan" : "SQL")
+				                    << (slq.can_deserialize_plan ? " type='" + LogicalOperatorToString(type) + "'" : "")
+				                    << ", executed from " << (slq.can_deserialize_plan ? "plan" : "SQL")
 				                    << " succeeded but was expected to fail.");
 			} else {
 				LOG_DEBUG("Executed statement #"
@@ -275,7 +274,7 @@ static void SerializeQueryStatements(Connection &con, BinarySerializer &serializ
 	}
 }
 
-  void CheckDirectoryEmpty(FileSystem &fs, const string &directory) {
+void CheckDirectoryEmpty(FileSystem &fs, const string &directory) {
 	if (!fs.DirectoryExists(directory)) {
 		throw InvalidInputException("Directory '%s' does not exist", directory.c_str());
 	}
@@ -286,7 +285,6 @@ static void SerializeQueryStatements(Connection &con, BinarySerializer &serializ
 			throw InvalidInputException("Working directory is not empty, found file: '%s'", path.c_str());
 		}
 	});
-
-  }
+}
 
 } // namespace duckdb
