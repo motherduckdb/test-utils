@@ -28,6 +28,8 @@ static void SerializeQueryStatements(Connection &con, BinarySerializer &serializ
                                      TUStorageExtensionInfo &state, Parser &parser,
                                      TestDrivenTransactionState &test_driven_transaction_state);
 
+static void CheckDirectoryEmpty(FileSystem &, const string &);
+
 constexpr const char *tag_prefix = "-- bwc_tag:";
 
 bool SerializeQueriesPlansFromFile(ClientContext &context, const vector<Value> &params) {
@@ -45,7 +47,12 @@ bool SerializeQueriesPlansFromFile(ClientContext &context, const vector<Value> &
 	std::map<string, string> query_flags;
 	static const uint32_t tag_prefix_length = strlen(tag_prefix);
 	bool is_first_query_line = true;
+	std::string working_dir;
 	while (std::getline(queries_if, line)) {
+		if (line.empty()) {
+			continue;
+		}
+
 		if (line.rfind(tag_prefix, 0) != 0) {
 			if (is_first_query_line) {
 				is_first_query_line = false;
@@ -63,6 +70,9 @@ bool SerializeQueriesPlansFromFile(ClientContext &context, const vector<Value> &
 			current_query.clear();
 			query_flags.clear();
 			is_first_query_line = true;
+		} else if (tag_key_value.rfind("working_dir=", 0) == 0) {
+			working_dir = tag_key_value.substr(strlen("working_dir="));
+			CheckDirectoryEmpty(context.db->GetFileSystem(), working_dir);
 		} else {
 			auto pos = tag_key_value.find('=');
 			if (pos == string::npos) {
@@ -264,5 +274,19 @@ static void SerializeQueryStatements(Connection &con, BinarySerializer &serializ
 		++statement_idx;
 	}
 }
+
+  void CheckDirectoryEmpty(FileSystem &fs, const string &directory) {
+	if (!fs.DirectoryExists(directory)) {
+		throw InvalidInputException("Directory '%s' does not exist", directory.c_str());
+	}
+
+	bool has_files = false;
+	fs.ListFiles(directory, [&has_files](const string &path, bool is_directory) {
+		if (!is_directory) {
+			throw InvalidInputException("Working directory is not empty, found file: '%s'", path.c_str());
+		}
+	});
+
+  }
 
 } // namespace duckdb
