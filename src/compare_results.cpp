@@ -251,6 +251,9 @@ std::unique_ptr<utils::ComparisonErrorReport> DoSimpleCompareResults(const Seria
 		} else {
 			return nullptr; // both are empty
 		}
+	} else if (file_result.chunks.size() == 0) {
+		return make_uniq<utils::ComparisonErrorReport>(
+		    squery, "Results mismatch: expected result has chunks but actual result has none");
 	}
 
 	idx_t expected_col_count = in_mem_result.chunks[0]->ColumnCount();
@@ -279,7 +282,7 @@ std::unique_ptr<utils::ComparisonErrorReport> DoSimpleCompareResults(const Seria
 		}
 
 		// Find the next file chunk
-		while (file_index >= (*file_it)->size()) {
+		while (file_it != file_result.chunks.end() && file_index >= (*file_it)->size()) {
 			++file_it;
 			if (file_it == file_result.chunks.end()) {
 				// We should reach the end only above.
