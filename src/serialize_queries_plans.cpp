@@ -232,11 +232,15 @@ static void SerializeQueryStatements(Connection &con, BinarySerializer &serializ
 			}
 
 			if (result->HasError() && slq.ExpectSuccess()) {
-				LOG_ERROR("Query '" << query << "' type='" << LogicalOperatorToString(type) << "', executed from "
+				LOG_ERROR("Query '" << query << "'"
+									<< (slq.can_deserialize_plan ? " type='" + LogicalOperatorToString(type) + "'" : "")
+									<< ", executed from "
 				                    << (slq.can_deserialize_plan ? "plan" : "SQL")
-				                    << " failed with message: " << result->GetError());
+				                    << " failed with message:\n" << result->GetError());
 			} else if (!result->HasError() && !slq.ExpectSuccess()) {
-				LOG_ERROR("Query '" << query << "' type='" << LogicalOperatorToString(type) << "', executed from "
+				LOG_ERROR("Query '" << query << "'"
+									<< (slq.can_deserialize_plan ? " type='" + LogicalOperatorToString(type) + "'" : "")
+									<< ", executed from "
 				                    << (slq.can_deserialize_plan ? "plan" : "SQL")
 				                    << " succeeded but was expected to fail.");
 			} else {
