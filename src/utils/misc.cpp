@@ -38,8 +38,17 @@ void UseDBAndDetachOthers(Connection &con, const std::string &db_name, bool need
 }
 
 void DetachAllDatabases(ClientContext &context) {
-	// Detach all databases attached during the query
 	DatabaseManager &db_manager = context.db->GetDatabaseManager();
+
+	// First, check if it is the current default database
+	auto current_default_db = db_manager.GetDefaultDatabase(context);
+	if (current_default_db != "memory") {
+		LOG_DEBUG("Switching default database to 'memory'.");
+		db_manager.SetDefaultDatabase(context, "memory");
+	}
+
+	LOG_DEBUG("Detaching all databases...");
+	// Detach all databases attached during the query
 	auto databases = db_manager.GetDatabases(context);
 	for (auto &db : databases) {
 #if DUCKDB_VERSION_AT_MOST(1, 3, 2)
@@ -48,9 +57,12 @@ void DetachAllDatabases(ClientContext &context) {
 		auto &db_instance = *db;
 #endif
 		auto name = db_instance.GetName();
-		if (!db_instance.IsSystem() && !db_instance.IsTemporary() && name != "memory") {
-			db_manager.DetachDatabase(context, name, OnEntryNotFound::THROW_EXCEPTION);
+		if (db_instance.IsSystem() || db_instance.IsTemporary() || name == "memory") {
+			continue;
 		}
+
+		LOG_DEBUG("Detaching database '" << name << "'");
+		db_manager.DetachDatabase(context, name, OnEntryNotFound::THROW_EXCEPTION);
 	}
 }
 
