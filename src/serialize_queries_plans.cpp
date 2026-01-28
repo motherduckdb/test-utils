@@ -30,60 +30,16 @@ static void SerializeQueryStatements(Connection &con, BinarySerializer &serializ
 
 static void CheckDirectoryEmpty(FileSystem &, const string &);
 
+static void LoadSQLLogicQueries(FileSystem &fs,const std::string&, vector<SQLLogicQuery> &);
+
 constexpr const char *tag_prefix = "-- bwc_tag:";
 
 bool SerializeQueriesPlansFromFile(ClientContext &context, const vector<Value> &params) {
 	const auto input_file = params[0].GetValue<string>();
 	const auto output_file = params[1].GetValue<string>();
 
-	std::ifstream queries_if(input_file);
-	if (!queries_if) {
-		throw InvalidInputException("Could not open input file: '%s'", input_file.c_str());
-	}
-
-	string line;
 	vector<SQLLogicQuery> queries;
-	std::ostringstream current_query;
-	std::map<string, string> query_flags;
-	static const uint32_t tag_prefix_length = strlen(tag_prefix);
-	bool is_first_query_line = true;
-	std::string working_dir;
-	while (std::getline(queries_if, line)) {
-		if (line.empty()) {
-			continue;
-		}
-
-		if (line.rfind(tag_prefix, 0) != 0) {
-			if (is_first_query_line) {
-				is_first_query_line = false;
-			} else {
-				current_query << "\n";
-			}
-			current_query << line;
-			continue;
-		}
-
-		auto tag_key_value = line.substr(tag_prefix_length);
-		if (tag_key_value == "end_query") {
-			queries.push_back(SQLLogicQuery {current_query.str(), static_cast<uint32_t>(queries.size()), query_flags});
-			current_query.str("");
-			current_query.clear();
-			query_flags.clear();
-			is_first_query_line = true;
-		} else if (tag_key_value.rfind("working_dir=", 0) == 0) {
-			working_dir = tag_key_value.substr(strlen("working_dir="));
-			CheckDirectoryEmpty(context.db->GetFileSystem(), working_dir);
-		} else {
-			auto pos = tag_key_value.find('=');
-			if (pos == string::npos) {
-				query_flags[tag_key_value] = "";
-			} else {
-				auto key = tag_key_value.substr(0, pos);
-				auto value = tag_key_value.substr(pos + 1);
-				query_flags[key] = value;
-			}
-		}
-	}
+	LoadSQLLogicQueries(context.db->GetFileSystem(), input_file, queries);
 
 	TUFileWriter file_writer(context, output_file);
 
@@ -112,6 +68,7 @@ bool SerializeQueriesPlansFromFile(ClientContext &context, const vector<Value> &
 
 			slq.can_deserialize_plan = false;
 			slq.can_parse_query = false;
+
 			serializer.Begin();
 			slq.Serialize(serializer);
 			serializer.End();
@@ -142,6 +99,56 @@ bool SerializeQueriesPlansFromFile(ClientContext &context, const vector<Value> &
 	DetachAllDatabases(context);
 
 	return true;
+}
+
+void LoadSQLLogicQueries(FileSystem &fs, const std::string& input_file, vector<SQLLogicQuery> &queries) {
+	std::ifstream queries_if(input_file);
+	if (!queries_if) {
+		throw InvalidInputException("Could not open input file: '%s'", input_file.c_str());
+	}
+
+	string line;
+	std::ostringstream current_query;
+	std::map<string, string> query_flags;
+	static const uint32_t tag_prefix_length = strlen(tag_prefix);
+	bool is_first_query_line = true;
+	std::string working_dir;
+	while (std::getline(queries_if, line)) {
+		if (line.empty()) {
+			continue;
+		}
+
+		if (line.rfind(tag_prefix, 0) != 0) {
+			if (is_first_query_line) {
+				is_first_query_line = false;
+			} else {
+				current_query << "\n";
+			}
+			current_query << line;
+			continue;
+		}
+
+		auto tag_key_value = line.substr(tag_prefix_length);
+		if (tag_key_value == "end_query") {
+			queries.push_back(SQLLogicQuery {current_query.str(), static_cast<uint32_t>(queries.size()), query_flags});
+			current_query.str("");
+			current_query.clear();
+			query_flags.clear();
+			is_first_query_line = true;
+		} else if (tag_key_value.rfind("working_dir=", 0) == 0) {
+			working_dir = tag_key_value.substr(strlen("working_dir="));
+			CheckDirectoryEmpty(fs, working_dir);
+		} else {
+			auto pos = tag_key_value.find('=');
+			if (pos == string::npos) {
+				query_flags[tag_key_value] = "";
+			} else {
+				auto key = tag_key_value.substr(0, pos);
+				auto value = tag_key_value.substr(pos + 1);
+				query_flags[key] = value;
+			}
+		}
+	}
 }
 
 static void SerializeQueryStatements(Connection &con, BinarySerializer &serializer, SQLLogicQuery &slq,
