@@ -30,7 +30,15 @@ static void SerializeQueryStatements(Connection &con, BinarySerializer &serializ
 
 static void CheckDirectoryEmpty(FileSystem &, const string &);
 
-static void LoadSQLLogicQueries(FileSystem &fs,const std::string&, vector<SQLLogicQuery> &);
+static void LoadSQLLogicQueries(FileSystem &fs, const std::string &, vector<SQLLogicQuery> &);
+
+static void SerializeSLQAndAddToState(BinarySerializer &, TUStorageExtensionInfo &, SQLLogicQuery &);
+static void SerializeAndUpdateState(BinarySerializer &, TUStorageExtensionInfo &, SQLLogicQuery &,
+                                    unique_ptr<SerializedResult> &&);
+static void SerializeAndUpdateState(BinarySerializer &, TUStorageExtensionInfo &, SQLLogicQuery &,
+                                    unique_ptr<QueryResult> &&);
+
+static void TrySerializePlan(SQLLogicQuery &, idx_t, const LogicalOperator &);
 
 constexpr const char *tag_prefix = "-- bwc_tag:";
 
@@ -69,13 +77,8 @@ bool SerializeQueriesPlansFromFile(ClientContext &context, const vector<Value> &
 			slq.can_deserialize_plan = false;
 			slq.can_parse_query = false;
 
-			serializer.Begin();
-			slq.Serialize(serializer);
-			serializer.End();
-
 			auto result = con.context->Query(slq.query, false);
-			state.AddQuery(slq);
-			state.AddResult(make_uniq<SerializedResult>(slq.uuid, *result));
+			SerializeAndUpdateState(serializer, state, slq, std::move(result));
 			continue;
 		}
 
@@ -206,11 +209,6 @@ static void SerializeQueryStatements(Connection &con, BinarySerializer &serializ
 			    "Cannot serialize query with multiple statements when subsequent statement cannot be serialized");
 		}
 
-		serializer.Begin();
-		slq.Serialize(serializer);
-		serializer.End();
-		state.AddQuery(slq);
-
 		if (slq.should_skip_query) {
 			auto result = make_uniq<SerializedResult>(slq.uuid);
 			try {
@@ -224,11 +222,19 @@ static void SerializeQueryStatements(Connection &con, BinarySerializer &serializ
 				result->success = false;
 			}
 
-			state.AddResult(std::move(result));
+			SerializeAndUpdateState(serializer, state, slq, std::move(result));
 			continue;
 		}
 
 		if (slq.can_deserialize_plan) {
+			// Try to serialize the plan in a dummy stream
+			TrySerializePlan(slq, statement_idx, *planner.plan);
+		}
+
+		SerializeSLQAndAddToState(serializer, state, slq);
+
+		if (slq.can_deserialize_plan) {
+			LOG_DEBUG("Serializing plan for query #" << slq.query_idx);
 			serializer.Begin();
 			planner.plan->Serialize(serializer);
 			serializer.End();
@@ -291,6 +297,41 @@ void CheckDirectoryEmpty(FileSystem &fs, const string &directory) {
 			throw InvalidInputException("Working directory is not empty, found file: '%s'", path.c_str());
 		}
 	});
+}
+
+void TrySerializePlan(SQLLogicQuery &slq, idx_t statement_idx, const LogicalOperator &plan) {
+	MemoryStream ms;
+	BinarySerializer bs(ms);
+	bs.Begin();
+	try {
+		plan.Serialize(bs);
+	} catch (NotImplementedException &e) {
+		LOG_DEBUG("Cannot serialize plan for statement #" << statement_idx << " of query #" << slq.query_idx
+		                                                  << ": plan type=" << LogicalOperatorToString(plan.type)
+		                                                  << ", serialization not implemented: " << e.what());
+		slq.can_deserialize_plan = false;
+	}
+}
+
+void SerializeSLQAndAddToState(BinarySerializer &serializer, TUStorageExtensionInfo &state, SQLLogicQuery &slq) {
+	LOG_DEBUG("Serializing query #" << slq.query_idx << " with UUID " << UUIDToString(slq.uuid));
+	serializer.Begin();
+	slq.Serialize(serializer);
+	serializer.End();
+
+	state.AddQuery(slq);
+}
+
+void SerializeAndUpdateState(BinarySerializer &serializer, TUStorageExtensionInfo &state, SQLLogicQuery &slq,
+                             unique_ptr<SerializedResult> &&result) {
+	SerializeSLQAndAddToState(serializer, state, slq);
+	state.AddResult(std::move(result));
+}
+
+void SerializeAndUpdateState(BinarySerializer &serializer, TUStorageExtensionInfo &state, SQLLogicQuery &slq,
+                             unique_ptr<QueryResult> &&result) {
+	SerializeSLQAndAddToState(serializer, state, slq);
+	state.AddResult(make_uniq<SerializedResult>(slq.uuid, *result));
 }
 
 } // namespace duckdb
