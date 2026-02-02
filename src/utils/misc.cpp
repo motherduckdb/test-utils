@@ -40,11 +40,26 @@ void UseDBAndDetachOthers(Connection &con, const std::string &db_name, bool need
 void DetachAllDatabases(ClientContext &context) {
 	DatabaseManager &db_manager = context.db->GetDatabaseManager();
 
-	// First, check if it is the current default database
+	// First, ensure 'memory' is the current default database
 	auto current_default_db = db_manager.GetDefaultDatabase(context);
 	if (current_default_db != "memory") {
+		Connection con(*context.db);
+
 		LOG_DEBUG("Switching default database to 'memory'.");
 		db_manager.SetDefaultDatabase(context, "memory");
+		{
+			LOG_DEBUG("Attaching in-memory database 'memory' to switch default database.");
+			auto res = con.Query("ATTACH ':memory:';");
+			if (res->HasError()) {
+				res->ThrowError();
+			}
+		}
+		{
+			auto res = con.Query("USE memory;");
+			if (res->HasError()) {
+				res->ThrowError();
+			}
+		}
 	}
 
 	LOG_DEBUG("Detaching all databases...");
