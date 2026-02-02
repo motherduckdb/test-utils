@@ -101,7 +101,7 @@ bool SerializeQueriesPlansFromFile(ClientContext &context, const vector<Value> &
 	return true;
 }
 
-void LoadSQLLogicQueries(FileSystem &fs, const std::string& input_file, vector<SQLLogicQuery> &queries) {
+void LoadSQLLogicQueries(FileSystem &fs, const std::string &input_file, vector<SQLLogicQuery> &queries) {
 	std::ifstream queries_if(input_file);
 	if (!queries_if) {
 		throw InvalidInputException("Could not open input file: '%s'", input_file.c_str());
@@ -286,8 +286,7 @@ void CheckDirectoryEmpty(FileSystem &fs, const string &directory) {
 		throw InvalidInputException("Directory '%s' does not exist", directory.c_str());
 	}
 
-	bool has_files = false;
-	fs.ListFiles(directory, [&has_files](const string &path, bool is_directory) {
+	fs.ListFiles(directory, [](const string &path, bool is_directory) {
 		if (!is_directory) {
 			throw InvalidInputException("Working directory is not empty, found file: '%s'", path.c_str());
 		}

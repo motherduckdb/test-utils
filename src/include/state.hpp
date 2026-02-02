@@ -4,7 +4,6 @@
 
 #include <duckdb/common/types/uuid.hpp>
 #include <duckdb/storage/storage_extension.hpp>
-#include <duckdb/main/connection.hpp>
 
 #include "utils/serialization_helpers.hpp"
 
