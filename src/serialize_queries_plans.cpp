@@ -292,9 +292,10 @@ void CheckDirectoryEmpty(FileSystem &fs, const string &directory) {
 		throw InvalidInputException("Directory '%s' does not exist", directory.c_str());
 	}
 
-	fs.ListFiles(directory, [](const string &path, bool is_directory) {
+	fs.ListFiles(directory, [&directory](const string &path, bool is_directory) {
 		if (!is_directory) {
-			throw InvalidInputException("Working directory is not empty, found file: '%s'", path.c_str());
+			throw InvalidInputException("Working directory '%s' is not empty, found file: '%s'", directory.c_str(),
+			                            path.c_str());
 		}
 	});
 }
