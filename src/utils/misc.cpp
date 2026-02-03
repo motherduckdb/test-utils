@@ -47,7 +47,7 @@ void DetachAllDatabases(ClientContext &context) {
 
 		LOG_DEBUG("Switching default database to 'memory'.");
 		db_manager.SetDefaultDatabase(context, "memory");
-		{
+		if (db_manager.GetDatabase(context, "memory") == nullptr) {
 			LOG_DEBUG("Attaching in-memory database 'memory' to switch default database.");
 			auto res = con.Query("ATTACH ':memory:';");
 			if (res->HasError()) {
