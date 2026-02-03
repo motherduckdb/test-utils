@@ -42,6 +42,8 @@ bool ExecuteAllPlansFromFile(ClientContext &context, const vector<Value> &params
 	serializer.WriteProperty(100, "count", count);
 	serializer.End();
 
+	LOG_INFO("Executing " << count << " queries from file: '" << input_file << "'");
+
 	Connection con(*context.db);
 
 	TestDrivenTransactionState test_driven_transaction_state = TestDrivenTransactionState::NONE;
