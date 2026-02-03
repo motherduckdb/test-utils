@@ -231,7 +231,9 @@ static void SerializeQueryStatements(Connection &con, BinarySerializer &serializ
 			TrySerializePlan(slq, statement_idx, *planner.plan);
 		}
 
-		SerializeSLQAndAddToState(serializer, state, slq);
+		if (statement_idx == 0) {
+			SerializeSLQAndAddToState(serializer, state, slq);
+		}
 
 		if (slq.can_deserialize_plan) {
 			LOG_DEBUG("Serializing plan for query #" << slq.query_idx << ", statement #" << statement_idx);
