@@ -27,12 +27,12 @@ set(EXTENSION_SOURCES
   src/utils/logger.cpp
   src/utils/misc.cpp
   src/utils/serialization_helpers.cpp
-  src/compare_results.cpp
   src/execute_all_from_file.cpp
   src/serialize_queries_plans.cpp
   src/serialize_results.cpp
   src/state.cpp
   src/test_utils_extension.cpp
+  src/tu_compare_results.cpp
 )
 
 add_definitions(-DDUCKDB_MAJOR_VERSION=${DUCKDB_MAJOR_VERSION})
