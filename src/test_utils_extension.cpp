@@ -48,8 +48,8 @@ static void LoadInternal(ExtensionLoader &loader) {
 	// Register the functions
 	REGISTER_TF("serialize_queries_plans", SerializeQueriesPlansFromFile, 2);
 	REGISTER_TF("execute_all_plans_from_file", ExecuteAllPlansFromFile, 2);
-	REGISTER_TF("tu_compare_results", CompareResults, 1);
-	REGISTER_TF("tu_compare_results", CompareResults, 2);
+	REGISTER_TF("tu_compare_results_from_memory", CompareResults, 1);
+	REGISTER_TF("tu_compare_results_from_file", CompareResults, 2);
 	REGISTER_TF("serialize_results", SerializeResults, 1);
 }
 
