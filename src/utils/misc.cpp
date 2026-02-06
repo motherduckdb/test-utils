@@ -37,6 +37,21 @@ void UseDBAndDetachOthers(Connection &con, const std::string &db_name, bool need
 	}
 }
 
+bool IsMemoryAttached(Connection &con) {
+	auto res = con.Query("select count(*) from duckdb_databases() where database_name='memory';");
+	if (res->HasError()) {
+		res->ThrowError();
+	}
+
+	while (auto chunk = res->Fetch()) {
+		for (idx_t i = 0; i < chunk->size(); ++i) {
+			return chunk->GetValue(0, i) == 1;
+		}
+	}
+
+	return false;
+}
+
 void DetachAllDatabases(ClientContext &context) {
 	DatabaseManager &db_manager = context.db->GetDatabaseManager();
 
@@ -45,14 +60,19 @@ void DetachAllDatabases(ClientContext &context) {
 	if (current_default_db != "memory") {
 		Connection con(*context.db);
 
-		LOG_DEBUG("Switching default database to 'memory'.");
-		db_manager.SetDefaultDatabase(context, "memory");
-		if (db_manager.GetDatabase(context, "memory") == nullptr) {
+		bool memory_attached = IsMemoryAttached(con);
+		LOG_DEBUG("Current default database is '" << current_default_db << "'. Memory attached: " << memory_attached);
+
+		if (!memory_attached) {
 			LOG_DEBUG("Attaching in-memory database 'memory' to switch default database.");
 			auto res = con.Query("ATTACH ':memory:';");
 			if (res->HasError()) {
 				res->ThrowError();
 			}
+
+			LOG_DEBUG("Successfully attached in-memory database 'memory'.");
+		} else {
+			LOG_DEBUG("In-memory database 'memory' is already attached.");
 		}
 		{
 			auto res = con.Query("USE memory;");
@@ -60,6 +80,8 @@ void DetachAllDatabases(ClientContext &context) {
 				res->ThrowError();
 			}
 		}
+
+		db_manager.SetDefaultDatabase(context, "memory");
 	}
 
 	LOG_DEBUG("Detaching all databases...");
