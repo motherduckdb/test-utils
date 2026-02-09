@@ -118,15 +118,34 @@ std::string TDTxStateToString(TestDrivenTransactionState state) {
 	}
 }
 
+void AllowReadWriteTx(ClientContext &context) {
+	if (!context.transaction.HasActiveTransaction()) {
+		return;
+	}
+
+	auto &meta_txn = MetaTransaction::Get(context);
+
+	// List all databases this transaction has touched
+	auto &opened = meta_txn.OpenedTransactions();
+	for (auto &db_ref : opened) {
+		auto &tx = Transaction::Get(context, db_ref.get());
+		if (tx.IsReadOnly()) {
+			tx.SetReadWrite();
+		}
+	}
+}
+
 void UpdateTxStateAfterStatement(Connection &con, TestDrivenTransactionState &state, bool rollback_if_none) {
 	const auto original_state = state;
 	switch (state) {
 	case TestDrivenTransactionState::NONE:
 		if (rollback_if_none) {
 			LOG_DEBUG("Rolling-back implicit transaction");
+			AllowReadWriteTx(*con.context);
 			con.Rollback();
 		} else {
 			LOG_DEBUG("Committing implicit transaction");
+			AllowReadWriteTx(*con.context);
 			con.Commit();
 		}
 		break;
@@ -135,11 +154,13 @@ void UpdateTxStateAfterStatement(Connection &con, TestDrivenTransactionState &st
 	case TestDrivenTransactionState::TO_COMMIT:
 		state = TestDrivenTransactionState::NONE;
 		LOG_DEBUG("Committing test-driven transaction");
+		AllowReadWriteTx(*con.context);
 		con.Commit();
 		break;
 	case TestDrivenTransactionState::TO_ROLLBACK:
 		state = TestDrivenTransactionState::NONE;
 		LOG_DEBUG("Rolling-back test-driven transaction");
+		AllowReadWriteTx(*con.context);
 		con.Rollback();
 		break;
 	default:
