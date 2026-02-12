@@ -14,12 +14,6 @@ class TUStorageExtensionInfo : public StorageExtensionInfo {
 public:
 	static TUStorageExtensionInfo &GetState(const DatabaseInstance &instance);
 
-	void PushPlan(SerializedPlan &&plan);
-
-	SerializedPlan PopPlan();
-
-	bool HasPlan();
-
 	void AddQuery(const SQLLogicQuery &query);
 
 	void AddResult(unique_ptr<SerializedResult> &&result);
@@ -32,7 +26,6 @@ public:
 
 private:
 	std::mutex mutex;
-	std::queue<SerializedPlan> plans;
 	std::map<hugeint_t, SQLLogicQuery> queries;
 	std::map<hugeint_t, unique_ptr<SerializedResult>> results;
 	std::vector<hugeint_t> ordered_results_uuids;
