@@ -10,11 +10,6 @@
 
 namespace duckdb {
 
-struct SerializedPlan {
-	MemoryStream serialized_plan;
-	hugeint_t uuid;
-};
-
 struct SerializedResult {
 	SerializedResult() = default;
 	SerializedResult(const hugeint_t &, QueryResult &query_result);

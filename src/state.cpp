@@ -24,27 +24,6 @@ TUStorageExtensionInfo &TUStorageExtensionInfo::GetState(const DatabaseInstance 
 #endif
 }
 
-void TUStorageExtensionInfo::PushPlan(SerializedPlan &&plan) {
-	std::lock_guard<std::mutex> lock(mutex);
-	plans.push(std::move(plan));
-}
-
-SerializedPlan TUStorageExtensionInfo::PopPlan() {
-	std::lock_guard<std::mutex> lock(mutex);
-	if (plans.empty()) {
-		throw InternalException("No plans available to pop.");
-	}
-
-	auto plan = std::move(plans.front());
-	plans.pop();
-	return plan;
-}
-
-bool TUStorageExtensionInfo::HasPlan() {
-	std::lock_guard<std::mutex> lock(mutex);
-	return !plans.empty();
-}
-
 void TUStorageExtensionInfo::AddResult(unique_ptr<SerializedResult> &&result) {
 	std::lock_guard<std::mutex> lock(mutex);
 	ordered_results_uuids.push_back(result->uuid);
