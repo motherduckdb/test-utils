@@ -4,6 +4,8 @@
 name: Main Extension Distribution Pipeline
 on:
   push:
+    paths:
+      - '**.tar.gz'
     branches:
       - "main"
   pull_request:
