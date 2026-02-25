@@ -175,7 +175,13 @@ jobs:
 
   upload_extensions:
     name: Upload Extensions to S3
-    needs: [duckdb-stable-110, duckdb-stable-111, duckdb-stable-112, duckdb-stable-113, duckdb-stable-120, duckdb-stable-121, duckdb-stable-122, duckdb-stable-130, duckdb-stable-131]
+    needs: [
+      duckdb-stable-110, duckdb-stable-111, duckdb-stable-112, duckdb-stable-113,
+      duckdb-stable-120, duckdb-stable-121, duckdb-stable-122,
+      duckdb-stable-130, duckdb-stable-131, duckdb-stable-132,
+      duckdb-stable-140, duckdb-stable-141, duckdb-stable-142, duckdb-stable-143, duckdb-stable-144,
+      duckdb-main
+    ]
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
