@@ -6,6 +6,7 @@ on:
   push:
     paths-ignore:
       - '**.tar.gz'
+      - 'extensions/**'
     branches:
       - "main"
   pull_request:
@@ -173,8 +174,8 @@ jobs:
       exclude_archs: 'linux_arm64;linux_amd64_musl;osx_amd64;windows_amd64;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads'
       extension_name: test_utils
 
-  upload_extensions:
-    name: Upload Extensions to S3
+  commit_extensions:
+    name: Commit Extensions to Repository
     needs: [
       duckdb-stable-110, duckdb-stable-111, duckdb-stable-112, duckdb-stable-113,
       duckdb-stable-120, duckdb-stable-121, duckdb-stable-122,
@@ -183,43 +184,43 @@ jobs:
       duckdb-main
     ]
     runs-on: ubuntu-latest
+    if: ${{ github.ref_name == 'main' }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::785715327372:role/github-actions-ci
-          role-session-name: github-actions-ci
-          aws-region: us-east-1
-
-      - name: Upload extensions
-        if: ${{github.ref_name == 'main'}}
+      - name: Organize extensions
         run: |
           set -euo pipefail
+          rm -rf extensions
+          mkdir -p extensions
           # Files are like: `test_utils-v1.3.0-extension-osx_arm64/test_utils.duckdb_extension`
-          for FULL_EXT_PATH in $(find . -name test_utils.duckdb_extension); do
+          for FULL_EXT_PATH in $(find . -path ./extensions -prune -o -name test_utils.duckdb_extension -print); do
             echo "Processing: '${FULL_EXT_PATH}'"
 
             DIR_NAME=$(dirname "$FULL_EXT_PATH")
             DUCKDB_VERSION=$(echo $DIR_NAME | cut -d'-' -f2)
             EXT_ARCH=$(echo $DIR_NAME | cut -d'-' -f4)
 
-            cd "$DIR_NAME" || exit 1
-            gzip --keep -f "test_utils.duckdb_extension"
+            OUTPUT_DIR="extensions/${DUCKDB_VERSION}/${EXT_ARCH}"
+            mkdir -p "$OUTPUT_DIR"
 
-            # Then upload the DIR_NAME to the release
-            S3_OUTPUT_PATH_VER="s3://ext-motherduck-com/${DUCKDB_VERSION}/${EXT_ARCH}/test_utils.${{ github.sha }}.duckdb_extension.gz"
-            S3_OUTPUT_PATH="s3://ext-motherduck-com/${DUCKDB_VERSION}/${EXT_ARCH}/test_utils.duckdb_extension.gz"
+            gzip --keep -f "${FULL_EXT_PATH}"
+            cp "${FULL_EXT_PATH}.gz" "${OUTPUT_DIR}/test_utils.duckdb_extension.gz"
 
-            echo "Uploading 'test_utils.duckdb_extension.gz' to '${S3_OUTPUT_PATH}' and '${S3_OUTPUT_PATH_VER}'"
-            aws s3 cp --no-progress test_utils.duckdb_extension.gz "${S3_OUTPUT_PATH_VER}"
-
-            # Overwrite the latest version with the current one
-            aws s3 cp --no-progress "${S3_OUTPUT_PATH_VER}" "${S3_OUTPUT_PATH}"
-            cd .. || exit 1
+            echo "Copied to '${OUTPUT_DIR}/test_utils.duckdb_extension.gz'"
           done
+
+      - name: Commit and push extensions
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add extensions/
+          git commit -m "Update extensions" || echo "No changes to commit"
+          git push
 
   code-quality-check:
     name: Code Quality Check
