@@ -16,6 +16,7 @@
 #include <duckdb/common/serializer/binary_serializer.hpp>
 #include <duckdb/common/serializer/memory_stream.hpp>
 #include <duckdb/common/types/uuid.hpp>
+#include <duckdb/main/prepared_statement_data.hpp>
 #include <duckdb/parser/parser.hpp>
 #include <duckdb/parser/parsed_data/transaction_info.hpp>
 #include <duckdb/parser/statement/logical_plan_statement.hpp>
@@ -154,6 +155,21 @@ void LoadSQLLogicQueries(FileSystem &fs, const std::string &input_file, vector<S
 	}
 }
 
+shared_ptr<PreparedStatementData> CreatePreparedStatement(Planner &planner, unique_ptr<SQLStatement> statement) {
+	auto result = make_shared_ptr<PreparedStatementData>(statement->type);
+	result->unbound_statement = std::move(statement);
+	result->names = std::move(planner.names);
+	result->types = std::move(planner.types);
+	result->properties = std::move(planner.properties);
+
+	// TODO Optimize?
+
+	// Create physical plan
+	PhysicalPlanGenerator physical_planner(planner.context);
+	result->physical_plan = physical_planner.Plan(std::move(planner.plan));
+	return result;
+}
+
 static void SerializeQueryStatements(Connection &con, BinarySerializer &serializer, SQLLogicQuery &slq,
                                      TUStorageExtensionInfo &state, Parser &parser,
                                      TestDrivenTransactionState &test_driven_transaction_state) {
@@ -176,6 +192,7 @@ static void SerializeQueryStatements(Connection &con, BinarySerializer &serializ
 
 		Planner planner(*con.context);
 		bool plan_created = false;
+		auto statement_copy = statement->Copy();
 		try {
 			planner.CreatePlan(std::move(statement));
 			plan_created = !!planner.plan;
@@ -251,7 +268,12 @@ static void SerializeQueryStatements(Connection &con, BinarySerializer &serializ
 				// If we can deserialize the plan, we execute it
 				type = planner.plan->type;
 				planner.plan->ResolveOperatorTypes();
-				result = con.context->Query(make_uniq<LogicalPlanStatement>(std::move(planner.plan)), false);
+
+				auto prepared = CreatePreparedStatement(planner, std::move(statement_copy));
+
+				// Execute the prepared statement
+				case_insensitive_map_t<BoundParameterData> empty_params;
+				result = con.context->Execute(query, prepared, empty_params);
 			} else {
 				result = con.context->Query(query, false);
 			}
