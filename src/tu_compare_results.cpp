@@ -7,6 +7,7 @@
 #include <yyjson.hpp>
 
 #include <fstream>
+#include <iostream>
 
 #include "state.hpp"
 #include "utils/compatibility.hpp"
